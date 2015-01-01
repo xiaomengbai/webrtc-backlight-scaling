@@ -163,6 +163,7 @@ public class AppRTCProximitySensor implements SensorEventListener {
   private void logProximitySensorInfo() {
     if (proximitySensor == null)
       return;
+    /*
     Log.d(TAG, "Proximity sensor: " + "name=" + proximitySensor.getName()
         + ", vendor: " + proximitySensor.getVendor()
         + ", type: " + proximitySensor.getStringType()
@@ -173,6 +174,7 @@ public class AppRTCProximitySensor implements SensorEventListener {
         + ", resolution: " + proximitySensor.getResolution()
         + ", max range: " + proximitySensor.getMaximumRange()
         + ", isWakeUpSensor: " + proximitySensor.isWakeUpSensor());
+    */
   }
 
   /**
