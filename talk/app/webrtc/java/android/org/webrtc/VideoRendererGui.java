@@ -47,6 +47,11 @@ import android.util.Log;
 
 import org.webrtc.VideoRenderer.I420Frame;
 
+import java.util.Iterator;
+
+import java.util.Arrays;
+import java.util.ListIterator;
+import android.os.Handler;
 /**
  * Efficiently renders YUV frames using the GPU for CSC.
  * Clients will want first to call setView() to pass GLSurfaceView
@@ -201,6 +206,13 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     return program;
 }
 
+    public interface frameProcess {
+        public int scanMaxY(I420Frame frame);
+        public void updateBacklight(ArrayList<Integer> idx, ArrayList<Double> bl);
+        public void tryScaleBacklight(int index);
+    }
+
+
   /**
    * Class used to display stream of YUV420 frames at particular location
    * on a screen. New video frames are sent to display using renderFrame()
@@ -215,11 +227,41 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     private int oesTexture = -1;
     private float[] stMatrix = new float[16];
 
+
+    private int frameNrHold = 20;
+    LinkedBlockingQueue<I420Frame> frameAvailableQueue;
+    LinkedBlockingQueue<I420Frame> frameDPQueue;
+    private frameProcess callbacks;
+    private boolean sizeUpdated = false;
+    private int frameIdx;
+    private int lastLuminance = 255;
+    private int capacity = frameNrHold;
+    private int scanIntv = 5;
+    private int lastLum = 255;
+
+    private final static boolean DBFLAG = false;
+    static void mLog(String tag, String s){
+      if(DBFLAG) Log.d(tag, s);
+    }
+
+      // =MBX=
+
+      private DynamicProgramming DP;
+      private int sampleRate = 5;
+      private int renderIdx;
+      static private boolean funcEnable = true;
+      {
+          DP = new DynamicProgramming(0.004, sampleRate * 0.004, 0.4, 1.0);
+      }
+
+      //=MBX=
+
     // Render frame queue - accessed by two threads. renderFrame() call does
     // an offer (writing I420Frame to render) and early-returns (recording
     // a dropped frame) if that queue is full. draw() call does a peek(),
     // copies frame to texture and then removes it from a queue using poll().
     LinkedBlockingQueue<I420Frame> frameToRenderQueue;
+
     // Local copy of incoming video frame.
     private I420Frame yuvFrameToRender;
     private I420Frame textureFrameToRender;
@@ -263,16 +305,23 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     private int videoWidth;
     private int videoHeight;
 
+
+
     private YuvImageRenderer(
         GLSurfaceView surface, int id,
         int x, int y, int width, int height,
-        ScalingType scalingType, boolean mirror) {
+        ScalingType scalingType, boolean mirror, frameProcess cb) {
       Log.d(TAG, "YuvImageRenderer.Create id: " + id);
       this.surface = surface;
       this.id = id;
       this.scalingType = scalingType;
       this.mirror = mirror;
-      frameToRenderQueue = new LinkedBlockingQueue<I420Frame>(1);
+      //frameToRenderQueue = new LinkedBlockingQueue<I420Frame>(1);
+      frameToRenderQueue = new LinkedBlockingQueue<I420Frame>(frameNrHold);
+      frameAvailableQueue = new LinkedBlockingQueue<I420Frame>(frameNrHold);
+      frameDPQueue = new LinkedBlockingQueue<I420Frame>(frameNrHold);
+      this.callbacks = cb;
+
       // Create texture vertices.
       texLeft = (x - 50) / 50.0f;
       texTop = (50 - y) / 50.0f;
@@ -416,6 +465,12 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
           // YUV textures rendering.
           GLES20.glUseProgram(yuvProgram);
 
+          //=MBX=
+          if(funcEnable && frameFromQueue != null){
+              callbacks.tryScaleBacklight(frameFromQueue.idx);
+          }
+          //=MBX=
+
           for (int i = 0; i < 3; ++i) {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0 + i);
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, yuvTextures[i]);
@@ -486,6 +541,13 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
         if ((framesRendered % 150) == 0) {
           logStatistics();
         }
+
+	if (frameFromQueue.width == yuvFrameToRender.width &&
+	    frameFromQueue.height == yuvFrameToRender.height) {
+	    synchronized(frameAvailableQueue){
+		frameAvailableQueue.offer(frameFromQueue);
+	    }
+        }
       }
     }
 
@@ -527,6 +589,10 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     public void setSize(final int width, final int height) {
       Log.d(TAG, "ID: " + id + ". YuvImageRenderer.setSize: " +
           width + " x " + height);
+      //=MBX=
+      frameIdx = 0;
+      renderIdx = 0;
+      //=MBX=
       videoWidth = width;
       videoHeight = height;
       int[] strides = { width, width / 2, width / 2  };
@@ -535,18 +601,53 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
       // the frame while it is being copied.
       synchronized (frameToRenderQueue) {
         // Clear rendering queue.
-        frameToRenderQueue.poll();
+        //frameToRenderQueue.poll();
+	  frameToRenderQueue.clear();
+	  frameDPQueue.clear();
         // Re-allocate / allocate the frame.
-        yuvFrameToRender = new I420Frame(width, height, strides, null);
+	yuvFrameToRender = new I420Frame(width, height, strides, null);
+	frameAvailableQueue.clear();
+	for(int i = 0; i < frameNrHold; i++){
+	    frameAvailableQueue.offer(new I420Frame(width, height, strides, null));
+	}
         textureFrameToRender = new I420Frame(width, height, null, -1);
         updateTextureProperties = true;
       }
+
+      sizeUpdated = true;
     }
+
+    @Override
+    public boolean isSizeSet(){
+	return yuvFrameToRender != null && textureFrameToRender != null;
+    }
+
+    @Override
+    public boolean isSizeUpdated(){
+	if(sizeUpdated){
+	    sizeUpdated = false;
+	    return true;
+	}else{
+	    return false;
+	}
+    }
+
+    @Override
+    public int getWidth(){
+	return videoWidth;
+    }
+
+    @Override
+    public int getHeight(){
+	return videoHeight;
+    }
+
 
     @Override
     public synchronized void renderFrame(I420Frame frame) {
       long now = System.nanoTime();
       framesReceived++;
+
       // Skip rendering of this frame if setSize() was not called.
       if (yuvFrameToRender == null || textureFrameToRender == null) {
         framesDropped++;
@@ -569,17 +670,105 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
         }
       }
 
-      if (frameToRenderQueue.size() > 0) {
-        // Skip rendering of this frame if previous frame was not rendered yet.
+      // if (frameToRenderQueue.size() > 0) {
+      //   // Skip rendering of this frame if previous frame was not rendered yet.
+      //   framesDropped++;
+      //   return;
+      // }
+      if (frameAvailableQueue.size() <= 0) {
+        // Skip rendering of this frame if no available frames
         framesDropped++;
         return;
       }
 
+
       // Create a local copy of the frame.
       if (frame.yuvFrame) {
-        yuvFrameToRender.copyFrom(frame);
-        rendererType = RendererType.RENDERER_YUV;
-        frameToRenderQueue.offer(yuvFrameToRender);
+	// yuvFrameToRender.copyFrom(frame);
+        // rendererType = RendererType.RENDERER_YUV;
+        // frameToRenderQueue.offer(yuvFrameToRender);
+
+	I420Frame frameToRender;
+	synchronized(frameAvailableQueue){
+          frameToRender = frameAvailableQueue.poll();
+	}
+
+	frameToRender.copyFrom(frame);
+	if(!mirror){
+            // mLog(TAG, "Render Frame[" + (framesReceived - framesDropped) + "/" + framesReceived + "]: " + frameToRender.toString());
+
+	    // callbacks.scanMaxY(frameToRender);
+	    // adjustMaxLumsGreedy(frameToRender, lastLum, 0.004);
+	    // lastLum = frameToRender.adjustLum;
+	    // rendererType = RendererType.RENDERER_YUV;
+	    // frameToRenderQueue.offer(frameToRender);
+
+            /***
+            byte[] YData = frameToRender.getYData();
+            int width =frameToRender.width;
+            int height = frameToRender.height;
+            Log.d(">>>>>>>> Received Frame <<<<<<<<<<",
+                  "max Value: " +
+                  (int)(YData[width + 1] & 0xff) + "," + (int)(YData[width + 2] & 0xff) + "," +
+                  (int)(YData[width + 3] & 0xff) + "," + (int)(YData[width + 4] & 0xff) +
+                  " index: " + (int)(YData[1] & 0xff) + "," + (int)(YData[2] & 0xff) + "," + (int)(YData[3] & 0xff) + "," + (int)(YData[4] & 0xff));
+            ***/
+            //mLog("**********************", "before scanning ");
+            /***
+	    frameToRender.idx = frameIdx;
+            if(frameIdx % scanIntv == 0 && false){
+                int ret = callbacks.scanMaxY(frameToRender);
+                mLog("*****************", "max value is " + ret);
+	    	if(ret != -1)
+	    	    frameToRender.isScan = true;
+	    	else
+	    	    frameToRender.isScan = false;
+	    	mLog("******************", frameToRender.toString());
+	    }else{
+	    	frameToRender.isScan = false;
+	    }
+	    frameIdx++;
+	    frameIdx %= frameNrHold;
+            ***/
+          frameToRender.idx = frameIdx;
+          ++frameIdx;
+          frameDPQueue.offer(frameToRender);
+            /***
+	    mLog("******************", frameToRender.toString());
+            mLog("**********************", "frame DP queue size: " + frameDPQueue.size());
+            ***/
+          if(frameDPQueue.size() < frameNrHold && funcEnable)
+            return;
+
+          if(funcEnable){
+              ArrayList<Double> backlights = new ArrayList<Double>();
+              ArrayList<Integer> indices = new ArrayList<Integer>();
+              Iterator<I420Frame> iter = frameDPQueue.iterator();
+              while(iter.hasNext()){
+                  I420Frame fr = iter.next();
+                  if(frameIdx % sampleRate == 0){
+                      backlights.add(fr.getMaxLum(0) / 255.0);
+                      indices.add(fr.idx);
+                  }
+              }
+
+              Log.d(TAG, "Before Dynamic Programming: " + backlights);
+              backlights = DP.runDP(backlights);
+              Log.d(TAG, "After Dynamic Programming: " + backlights);
+
+              // put the (index, backlight) to map in main Activity
+              callbacks.updateBacklight(indices, backlights);
+          }
+          rendererType = RendererType.RENDERER_YUV;
+          while(frameDPQueue.size() > 0){
+            frameToRenderQueue.offer(frameDPQueue.poll());
+          }
+	}else{
+          rendererType = RendererType.RENDERER_YUV;
+          frameToRenderQueue.offer(frameToRender);
+	}
+
+	//        frameToRenderQueue.offer(frameToRender);
       } else {
         textureFrameToRender.copyFrom(frame);
         rendererType = RendererType.RENDERER_TEXTURE;
@@ -592,7 +781,133 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
       surface.requestRender();
     }
 
+      private class DynamicProgramming {
+          /*
+           * Dynamic Programming
+           *
+           * Input a ArrayList<Double>, adjust the values due to the constraints
+           *
+           * granularity: values vary in units of this granularity.
+           * delta: values can't vary over this per time. Implicitly delta >= granularity
+           * minVal, maxVal: the bounds of values
+           *
+           */
+
+          private double granularity;
+          private double delta;
+          private double minVal;
+          private double maxVal;
+
+          private int deltaNr;
+          private int valNr;
+          private Double[][] resCache;
+          private Integer[][] choiceCache;
+
+          private double minSum;
+
+          public DynamicProgramming(double g, double d, double min, double max){
+              granularity = g;
+              delta = d;
+              minVal = min;
+              maxVal = max;
+              valNr = (int)Math.ceil((maxVal - minVal) / granularity) + 1;
+              deltaNr = (int)Math.floor(delta / granularity);
+          }
+
+          public DynamicProgramming(double g, double d, double min){
+              this(g, d, min, 1.0);
+          }
+
+          public DynamicProgramming(double g, double d){
+              this(g, d, 0.0, 1.0);
+          }
+
+          public ArrayList<Double> runGreedy(ArrayList<Double> vals){
+
+              // filter the values less then minVal
+              ListIterator<Double> iter = vals.listIterator();
+              Double old = vals.get(0);
+              while(iter.hasNext()){
+                  Double v = iter.next();
+                  Double min = Math.max(minVal, old - deltaNr * granularity);
+                  Double max = Math.min(maxVal, old + deltaNr * granularity);
+                  if(v <= min) v = min;
+                  else if(v >= max) v = max;
+                  else v = (int)(v / granularity) * granularity;
+                  old = v;
+                  iter.set(v);
+              }
+
+              return vals;
+          }
+
+          public ArrayList<Double> runDP(ArrayList<Double> vals){
+              resCache = new Double[vals.size()][valNr];
+              choiceCache = new Integer[vals.size()][valNr];
+
+
+              // initialize the mediate results
+              for(Double[] sub : resCache)
+                  Arrays.fill(sub, -1.0);
+
+              for(Integer[] sub : choiceCache)
+                  Arrays.fill(sub, -1);
+
+              // filter the values less then minVal
+              ListIterator<Double> iter = vals.listIterator();
+              while(iter.hasNext()){
+                  if(iter.next() < 0.4)
+                      iter.set(0.4);
+              }
+
+              for(int i = 0; i < valNr; i++)
+                  resCache[0][i] = granularity * i + minVal;
+
+              for(int i = 1; i < vals.size(); i++){
+                  for(int j = 0; j < valNr; j++){
+                      double cand = j * granularity + minVal;
+                      if(cand < vals.get(i))
+                          continue;
+                      int st = Math.max((j - deltaNr), 0);
+                      int ed = Math.min((j + deltaNr + 1), valNr);
+                      for(int k = st; k < ed; k++){
+                          if(resCache[i - 1][k] == -1)
+                              continue;
+                          double candVal = resCache[i - 1][k] + cand;
+                          if(resCache[i][j] == -1.0 || resCache[i][j] > candVal){
+                              resCache[i][j] = candVal;
+                              choiceCache[i][j] = k;
+                          }
+                      }
+                  }
+              }
+
+              minSum = -1.0;
+              int candIdx = -1;
+              for(int i = 0; i < valNr; i++){
+                  if(minSum == -1 || minSum > resCache[vals.size() - 1][i]){
+                      minSum = resCache[vals.size() - 1][i];
+                      candIdx = i;
+                  }
+              }
+
+              if(minSum != -1){
+                  Double[] newVals = new Double[vals.size()];
+                  for(int i = vals.size() - 1; i >= 0; i--){
+                      newVals[i] = candIdx * granularity + minVal;
+                      candIdx = choiceCache[i][candIdx];
+                  }
+                  vals = new ArrayList<Double>(Arrays.asList(newVals));
+              }
+
+              return vals;
+          }
+      }
+
   }
+
+
+
 
   /** Passes GLSurfaceView to video renderer. */
   public static void setView(GLSurfaceView surface) {
@@ -609,16 +924,16 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
    * (width, height). All parameters are in percentage of screen resolution.
    */
   public static VideoRenderer createGui(int x, int y, int width, int height,
-      ScalingType scalingType, boolean mirror) throws Exception {
+    ScalingType scalingType, boolean mirror, frameProcess cb) throws Exception {
     YuvImageRenderer javaGuiRenderer = create(
-        x, y, width, height, scalingType, mirror);
+      x, y, width, height, scalingType, mirror, cb);
     return new VideoRenderer(javaGuiRenderer);
   }
 
   public static VideoRenderer.Callbacks createGuiRenderer(
       int x, int y, int width, int height,
-      ScalingType scalingType, boolean mirror) {
-    return create(x, y, width, height, scalingType, mirror);
+      ScalingType scalingType, boolean mirror, frameProcess cb) {
+    return create(x, y, width, height, scalingType, mirror, cb);
   }
 
   /**
@@ -627,7 +942,7 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
    * screen resolution.
    */
   public static YuvImageRenderer create(int x, int y, int width, int height,
-      ScalingType scalingType, boolean mirror) {
+    ScalingType scalingType, boolean mirror, frameProcess cb) {
     // Check display region parameters.
     if (x < 0 || x > 100 || y < 0 || y > 100 ||
         width < 0 || width > 100 || height < 0 || height > 100 ||
@@ -641,7 +956,7 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     }
     final YuvImageRenderer yuvImageRenderer = new YuvImageRenderer(
         instance.surface, instance.yuvImageRenderers.size(),
-        x, y, width, height, scalingType, mirror);
+        x, y, width, height, scalingType, mirror, cb);
     synchronized (instance.yuvImageRenderers) {
       if (instance.onSurfaceCreatedCalled) {
         // onSurfaceCreated has already been called for VideoRendererGui -

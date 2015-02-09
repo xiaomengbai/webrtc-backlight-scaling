@@ -440,6 +440,20 @@ void VideoSource::RemoveSink(cricket::VideoRenderer* output) {
   channel_manager_->RemoveVideoRenderer(video_capturer_.get(), output);
 }
 
+// =MBX= add processor to capturer
+void VideoSource::AddProcessor(cricket::VideoProcessor* processor)
+{
+  channel_manager_->RegisterVideoProcessor(video_capturer_.get(), processor);
+}
+
+
+void VideoSource::RemoveProcessor(cricket::VideoProcessor* processor)
+{
+  channel_manager_->UnregisterVideoProcessor(video_capturer_.get(), processor);
+}
+
+// =MBX=
+
 // OnStateChange listens to the ChannelManager::SignalVideoCaptureStateChange.
 // This signal is triggered for all video capturers. Not only the one we are
 // interested in.
@@ -457,4 +471,11 @@ void VideoSource::SetState(SourceState new_state) {
   }
 }
 
+
+// =MBX=
+void ScanVideoProcessor::OnFrame(uint32 ssrc, cricket::VideoFrame* frame, bool* drop_frame)
+{
+  return;
+}
+//=MBX=
 }  // namespace webrtc

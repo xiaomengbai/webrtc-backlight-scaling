@@ -26,6 +26,10 @@
  */
 #include "talk/app/webrtc/videotrackrenderers.h"
 
+//=MBX=
+#include "webrtc/base/logging.h"
+#include "talk/media/base/videoframe.h"
+//=MBX=
 namespace webrtc {
 
 VideoTrackRenderers::VideoTrackRenderers()
@@ -75,7 +79,28 @@ bool VideoTrackRenderers::SetSize(int width, int height, int reserved) {
   return true;
 }
 
+#define _MBX_CHAR_TO_NUM(c) (static_cast<int>(c) & 0xFF)
+
 bool VideoTrackRenderers::RenderFrame(const cricket::VideoFrame* frame) {
+
+
+  /*
+  const uint8 *ydata = frame->GetYPlane();
+  int size =  width_ * height_;
+
+  LOG(LS_WARNING) << "!!!!!Rendering!!!!!!!" << width_ << "x" << height_ << ": "
+                  << "index: " << (int)ydata[1] << "," << (int)ydata[2] << ","
+                  << (int)ydata[3] << ","<< (int)ydata[4]
+                  << ", (0/2/5/10): " << "["
+                  << (int)(ydata[width_ + 1]) << "," << (int)(ydata[width_ + 2]) << ","
+                  << (int)(ydata[width_ + 3]) << "," << (int)(ydata[width_ + 4]) << "]["
+                  << (int)(ydata[width_*2 + 1]) << "," << (int)(ydata[width_*2 + 2]) << ","
+                  << (int)(ydata[width_*2 + 3]) << "," << (int)(ydata[width_*2 + 4]) << "]["
+                  << (int)(ydata[width_*3 + 1]) << "," << (int)(ydata[width_*3 + 2]) << ","
+                  << (int)(ydata[width_*3 + 3]) << "," << (int)(ydata[width_*3 + 4]) << "]["
+                  << (int)(ydata[width_*4 + 1]) << "," << (int)(ydata[width_*4 + 2]) << ","
+                  << (int)(ydata[width_*4 + 3]) << "," << (int)(ydata[width_*4 + 4]) << "]";
+  */
   rtc::CritScope cs(&critical_section_);
   if (!enabled_) {
     return true;

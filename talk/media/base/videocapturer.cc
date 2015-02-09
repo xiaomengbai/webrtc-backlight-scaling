@@ -533,30 +533,134 @@ void VideoCapturer::OnFrameCaptured(VideoCapturer*,
   }
 
   rtc::scoped_ptr<VideoFrame> adapted_frame(
-      frame_factory_->CreateAliasedFrame(captured_frame,
-                                         cropped_width, cropped_height,
-                                         adapted_width, adapted_height));
+    frame_factory_->CreateAliasedFrame(captured_frame,
+                                       cropped_width, cropped_height,
+                                       adapted_width, adapted_height));
+
 
   if (!adapted_frame) {
     // TODO(fbarchard): LOG more information about captured frame attributes.
     LOG(LS_ERROR) << "Couldn't convert to I420! "
                   << "From " << ToString(captured_frame) << " To "
                   << cropped_width << " x " << cropped_height;
+    // delete adapted_frame;
     return;
   }
+
 
   if (!muted_ && !ApplyProcessors(adapted_frame.get())) {
     // Processor dropped the frame.
     ++effect_frame_drops_;
     return;
   }
+
+  // =MBX=
+  // Scan the frame
+  static size_t hist[256];
+  static uint32_t index = 0;
+  static bool funcEnable = true;
+  if(funcEnable){ // Clear the histogram
+    memset(hist, 0, sizeof(hist));
+  }
+  if(funcEnable){
+    // stands for 0%, 2%, 5%, 10% brightest pixels ignorance
+    uint8 lum_thresholds[4] = {0};
+
+    uint8 *ydata = adapted_frame.get()->GetYPlane();
+    size_t width = adapted_frame.get()->GetWidth();
+    size_t height = adapted_frame.get()->GetHeight();
+    size_t size =  width * height;
+    size_t boundries[4];
+    boundries[0] = size;
+    boundries[1] = (size_t)(size * 0.98);
+    boundries[2] = (size_t)(size * 0.95);
+    boundries[3] = (size_t)(size * 0.90);
+    bool check_done[4] = {false};
+    // Scan the frame, perform histogram
+    for(int i = 0; i != size; i++){
+      hist[ydata[i]] += 1;
+    }
+
+    // give the index
+    ydata[1] = (uint8)((index & 0xFF000000) >> 24);
+    ydata[2] = (uint8)((index & 0x00FF0000) >> 16);
+    ydata[3] = (uint8)((index & 0x0000FF00) >>  8);
+    ydata[4] = (uint8)(index & 0x000000FF      );
+    index++;
+
+    for(uint8_t i = 255; i != 0; i--){
+      size -= hist[i];
+      if(size < boundries[0] && !check_done[0]){
+        lum_thresholds[0] = i;
+        check_done[0] = true;
+      }
+      if(size < boundries[1] && !check_done[1]){
+        lum_thresholds[1] = i;
+        check_done[1] = true;
+      }
+      if(size < boundries[2] && !check_done[2]){
+        lum_thresholds[2] = i;
+        check_done[2] = true;
+      }
+      if(size < boundries[3] && !check_done[3]){
+        lum_thresholds[3] = i;
+        check_done[3] = true;
+      }
+    }
+
+    for(int line = 0; line < 4; line++){
+      ydata[width*(line+1) + 1] = lum_thresholds[line];
+      ydata[width*(line+1) + 2] = lum_thresholds[line];
+      ydata[width*(line+1) + 3] = lum_thresholds[line];
+      ydata[width*(line+1) + 4] = lum_thresholds[line];
+    }
+    /*
+    LOG(LS_ERROR) << "Resolution: " << width << "x" << height
+                  << " 0%,2%,5%,10%: "
+                  << (int)lum_thresholds[0] << ","
+                  << (int)lum_thresholds[1] << ","
+                  << (int)lum_thresholds[2] << ","
+                  << (int)lum_thresholds[3]
+                  << ". index: " << (int)ydata[1] << "," << (int)ydata[2] << ","
+                  << (int)ydata[3] << ","<< (int)ydata[4]
+                  << " [index: " << index << "]";
+    */
+  }
+  // =MBX=
+
   if (muted_ || (enable_video_adapter_ && video_adapter_.IsBlackOutput())) {
     // TODO(pthatcher): Use frame_factory_->CreateBlackFrame() instead.
     adapted_frame->SetToBlack();
   }
+
   SignalVideoFrame(this, adapted_frame.get());
 
   UpdateStats(captured_frame);
+
+  // These code try to use a queue to buffer the adapted frame.
+  // This leads to some fps low.
+
+  // scan this frame
+  // uint8 max = 0;
+  // uint8 *ydata = adapted_frame->GetYPlane();
+  // for(int i = 0; i < adapted_frame->GetWidth() * adapted_frame->GetHeight(); i++)
+  //   if(max < ydata[i])
+  //     max = ydata[i];
+  // ydata[0] = max;
+  // frame_list_.push_back(adapted_frame);
+  // UpdateStats(captured_frame);
+  // if(frame_list_.size() < 5)
+  //   return;
+
+  // // adjust the frames
+  // while(frame_list_.size() != 0){
+  //   VideoFrame *f = frame_list_.front();
+  //   frame_list_.pop_front();
+  //   uint8 *ydata_ = f->GetYPlane();
+  //   memset(ydata_, 0, (int)(f->GetWidth() * f->GetHeight() * 0.5));
+  //   SignalVideoFrame(this, f);
+  //   delete f;
+  // }
 }
 
 void VideoCapturer::SetCaptureState(CaptureState state) {

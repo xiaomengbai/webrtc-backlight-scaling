@@ -1689,6 +1689,24 @@ int32_t MediaCodecVideoEncoder::EncodeOnCodecThread(
   last_input_timestamp_ms_ = current_timestamp_us_ / 1000;
   frames_in_queue_++;
 
+
+  // =MBX=
+  // Add code here
+  // Try to scan the data at yuv_buffer
+
+  uint8 max = 0;
+  int32_t pixel_nr = width_ * height_;
+  for(int i = 0; i < pixel_nr; i++){
+    if(yuv_buffer[i] > max){
+      max = yuv_buffer[i];
+    }
+  }
+  memset(yuv_buffer, 0, (int)(pixel_nr * 1.5));
+  yuv_buffer[0] = max;
+  LOG(LS_ERROR) << "******** encode function ********* ";
+
+  // =MBX=
+
   // Save input image timestamps for later output
   timestamps_.push_back(frame.timestamp());
   render_times_ms_.push_back(frame.render_time_ms());

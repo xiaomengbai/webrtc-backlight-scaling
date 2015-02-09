@@ -30,6 +30,7 @@ package org.webrtc;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
+import android.util.Log;
 /**
  * Java version of VideoRendererInterface.  In addition to allowing clients to
  * define their own rendering behavior (by passing in a Callbacks object), this
@@ -48,6 +49,46 @@ public class VideoRenderer {
     public Object textureObject;
     public int textureId;
 
+    public final static int MAX_0_LUM = 0;
+    public final static int MAX_2_LUM = 1;
+    public final static int MAX_5_LUM = 2;
+    public final static int MAX_10_LUM = 3;
+    public final static int MAX_LUM_LVL = 4;
+    public final static int MAX_LUM_CAND_NR = 4;
+    public int[] maxLumCandStPos;
+    public byte[][] lumCands;
+
+    public int maxY;
+    public int adjustLum;
+    public int idx;
+    public boolean isScan;
+
+    private void setLumCandStPos(int width){
+      maxLumCandStPos = new int[]{width + 1, width * 2 + 1, width * 3 + 1, width * 4 + 1};
+    }
+
+    {
+      lumCands = new byte[MAX_LUM_LVL][MAX_LUM_CAND_NR];
+    }
+
+    private void extractCand(){
+      for(int i = 0; i < MAX_LUM_LVL; i++){
+        for(int j = 0; j < MAX_LUM_CAND_NR; j++){
+          // max luminances are neighboring
+          lumCands[i][j] = yuvPlanes[0].get(maxLumCandStPos[i] + j);
+        }
+        //Log.d("EXTRACT THE MAX LUMINANCE", "L" + i + ": " + Arrays.toString(lumCands[i]));
+      }
+
+    }
+
+    public int getMaxLum(int level){
+      int maxLum = 0;
+      for(int i = 0; i < MAX_LUM_CAND_NR; i++)
+        maxLum += (int)(lumCands[level][i] & 0xff);
+      maxLum /= MAX_LUM_CAND_NR;
+      return maxLum;
+    }
     /**
      * Construct a frame of the given dimensions with the specified planar
      * data.  If |yuvPlanes| is null, new planes of the appropriate sizes are
@@ -66,6 +107,9 @@ public class VideoRenderer {
       }
       this.yuvPlanes = yuvPlanes;
       this.yuvFrame = true;
+
+      // =MBX=
+      setLumCandStPos(width);
     }
 
     /**
@@ -80,6 +124,9 @@ public class VideoRenderer {
       this.textureObject = textureObject;
       this.textureId = textureId;
       this.yuvFrame = false;
+
+      // =MBX=
+      setLumCandStPos(width);
     }
 
     /**
@@ -97,6 +144,10 @@ public class VideoRenderer {
         copyPlane(source.yuvPlanes[0], yuvPlanes[0]);
         copyPlane(source.yuvPlanes[1], yuvPlanes[1]);
         copyPlane(source.yuvPlanes[2], yuvPlanes[2]);
+
+        // =MBX=
+        extractCand();
+        // =MBX=
         return this;
       } else if (!source.yuvFrame && !yuvFrame) {
         textureObject = source.textureObject;
@@ -127,15 +178,36 @@ public class VideoRenderer {
           yuvPlanes[i].position(0);
           yuvPlanes[i].limit(yuvPlanes[i].capacity());
         }
+
+        // =MBX=
+        extractCand();
+        // =MBX=
+
         return this;
       }
 
+      public byte getYData(int pos){
+          return (yuvPlanes[0].array())[pos];
+      }
 
-    @Override
-    public String toString() {
-      return width + "x" + height + ":" + yuvStrides[0] + ":" + yuvStrides[1] +
-          ":" + yuvStrides[2];
-    }
+      public byte[] getYData(){
+	  return yuvPlanes[0].array();
+      }
+
+      public void setMaxY(int max){
+	  maxY = max;
+      }
+
+      public int getMaxY(){
+	  return maxY;
+      }
+
+
+      @Override
+      public String toString() {
+          return idx + ": " + width + "x" + height + ":" + yuvStrides[0] + ":" + yuvStrides[1] +
+              ":" + yuvStrides[2] + ", isScan: " + isScan + ", maxY: " + maxY + ", adjustLum: " + adjustLum;
+      }
 
     // Copy the bytes out of |src| and into |dst|, ignoring and overwriting
     // positon & limit in both buffers.
@@ -150,6 +222,12 @@ public class VideoRenderer {
   public static interface Callbacks {
     public void setSize(int width, int height);
     public void renderFrame(I420Frame frame);
+
+    public boolean isSizeSet();
+    public boolean isSizeUpdated();
+
+    public int getWidth();
+    public int getHeight();
   }
 
   // |this| either wraps a native (GUI) renderer or a client-supplied Callbacks

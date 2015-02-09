@@ -30,6 +30,9 @@
 
 #include <string>
 #include <vector>
+// =MBX= <<
+#include <list>
+// =MBX= >>
 
 #include "talk/media/base/mediachannel.h"
 #include "talk/media/base/videoadapter.h"
@@ -403,6 +406,10 @@ class VideoCapturer
   VideoProcessors video_processors_;
 
   DISALLOW_COPY_AND_ASSIGN(VideoCapturer);
+
+  // =MBX= <<
+  // std::list<VideoFrame *> frame_list_;
+  // =MBX= >>
 };
 
 }  // namespace cricket

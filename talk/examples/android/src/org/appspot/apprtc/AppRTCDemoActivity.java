@@ -61,7 +61,17 @@ import org.webrtc.StatsReport;
 import org.webrtc.VideoRenderer;
 import org.webrtc.VideoRendererGui;
 import org.webrtc.VideoRendererGui.ScalingType;
+import org.webrtc.VideoRendererGui.frameProcess;
 
+import org.webrtc.VideoRenderer.I420Frame;
+import android.content.Context;
+import android.renderscript.*;
+import java.util.Arrays;
+import android.os.Handler;
+import java.util.HashMap;
+import android.view.Window;
+import android.view.WindowManager;
+import java.util.ArrayList;
 /**
  * Activity of the AppRTCDemo Android app demonstrating interoperability
  * between the Android/Java implementation of PeerConnection and the
@@ -69,7 +79,8 @@ import org.webrtc.VideoRendererGui.ScalingType;
  */
 public class AppRTCDemoActivity extends Activity
     implements AppRTCClient.SignalingEvents,
-      PeerConnectionClient.PeerConnectionEvents {
+    PeerConnectionClient.PeerConnectionEvents,
+    VideoRendererGui.frameProcess {
   private static final String TAG = "AppRTCClient";
   private PeerConnectionClient pc;
   private AppRTCClient appRtcClient;
@@ -96,6 +107,31 @@ public class AppRTCDemoActivity extends Activity
   private boolean hwCodec;
   private boolean iceConnected;
   private boolean isError;
+
+    private RenderScript mRS;
+    private ScriptC_script mScript;
+    private Allocation Hist2D;
+    private Allocation Hist;
+    private Allocation YPanel;
+    private Allocation maxValue;
+    private Allocation stepsAlloc;
+    private Allocation stepSizeAlloc;
+    int[] maxL = new int[1];
+    private Script.LaunchOptions lo;
+    private int steps;
+    private int stepSize;
+
+    private Handler mHandler;
+    private HashMap<Integer, Double> backlightMap;
+    private Double updatedBacklight;
+    private Double accBacklight;
+    private Integer accTimes;
+    private static boolean funcEnable = true;
+    {
+        backlightMap = new HashMap<Integer, Double>();
+        accBacklight = 0.0;
+        accTimes = 0;
+    }
 
   @Override
   public void onCreate(Bundle savedInstanceState) {
@@ -125,9 +161,32 @@ public class AppRTCDemoActivity extends Activity
 
     VideoRendererGui.setView(videoView);
     scalingType = ScalingType.SCALE_ASPECT_FILL;
-    remoteRender = VideoRendererGui.create(0, 0, 100, 100, scalingType, false);
-    localRender = VideoRendererGui.create(0, 0, 100, 100, scalingType, true);
+    remoteRender = VideoRendererGui.create(0, 0, 100, 100, scalingType, false, this);
+    localRender = VideoRendererGui.create(0, 0, 100, 100, scalingType, true, this);
 
+    mRS = RenderScript.create(this);
+    mScript = new ScriptC_script(mRS);
+    lo = new Script.LaunchOptions();
+    steps = -1;
+    stepSize = -1;
+
+    YPanel = null;
+
+    Hist = Allocation.createSized(mRS, Element.I32(mRS), 256);
+    mScript.set_hist(Hist);
+
+    maxValue = Allocation.createSized(mRS, Element.I32(mRS), 1);
+    mScript.set_maxValue(maxValue);
+
+    stepsAlloc = Allocation.createSized(mRS, Element.I32(mRS), 1);
+    mScript.set_stepsAlloc(stepsAlloc);
+
+    stepSizeAlloc = Allocation.createSized(mRS, Element.I32(mRS), 1);
+    mScript.set_stepSizeAlloc(stepSizeAlloc);
+
+    //=MBX=
+    mHandler = new Handler();
+    //=MBX=
     videoView.setOnClickListener(
         new View.OnClickListener() {
           @Override
@@ -408,6 +467,9 @@ public class AppRTCDemoActivity extends Activity
         continue;
       }
       builder.append("\n");
+      //=MBX=
+      if(accTimes > 0) builder.append("Average Backlight: " + accBacklight / accTimes + "\n");
+      //=MBX=
     }
     hudView.setText(builder.toString() + hudView.getText());
   }
@@ -453,6 +515,12 @@ public class AppRTCDemoActivity extends Activity
     if (actualBitrate != null) {
       stat += "Actual BR: " + actualBitrate;
     }
+
+    // Window w = getWindow();
+    // WindowManager.LayoutParams lp = w.getAttributes();
+    // updatedBacklight = new Double(lp.screenBrightness);
+
+    stat += "\nBacklight: " + updatedBacklight;
     encoderStatView.setText(stat);
   }
 
@@ -607,4 +675,144 @@ public class AppRTCDemoActivity extends Activity
       disconnectWithErrorMessage(description);
     }
   }
+
+    @Override
+    public void updateBacklight(ArrayList<Integer> idx, ArrayList<Double> bl){
+        if(funcEnable){
+            if(idx.size() != bl.size()){
+                Log.w(TAG, "indices array size is not as same as the backlight's");
+                return;
+            }
+
+            synchronized(this){
+                for(int i = 0; i < idx.size(); i++)
+                    backlightMap.put(idx.get(i), bl.get(i));
+            }
+        }
+    }
+
+    @Override
+    public void tryScaleBacklight(int index){
+        Double b;
+        if(funcEnable){
+            synchronized(this){
+                b = backlightMap.get(index);
+            }
+
+            if(b != null){
+                final Double backlight = b;
+
+                accTimes++;
+                accBacklight += backlight;
+                updatedBacklight = b;
+
+                mHandler.post(new Runnable(){
+
+                        @Override
+                        public void run() {
+//                        Log.d(TAG, "update the backlight to " + backlight);
+                            Window w = getWindow();
+                            WindowManager.LayoutParams lp = w.getAttributes();
+                            lp.screenBrightness = backlight.floatValue();
+                            w.setAttributes(lp);
+                        }
+                    });
+            }
+        }
+    }
+
+    @Override
+    public int scanMaxY(I420Frame frame){
+	if(!remoteRender.isSizeSet()){
+	    Log.d(TAG, "scan failed! scanning before size is set");
+	    return -1;
+	}
+	if(remoteRender.isSizeUpdated()){
+	//     //YPanel = *****
+
+	    int[] stepsTemp = new int[1];
+	    int[] stepSizeTemp = new int[1];
+
+	    steps = remoteRender.getHeight();
+	    stepSize = remoteRender.getWidth();
+	    stepsTemp[0] = steps;
+	    stepSizeTemp[0] = stepSize;
+	    Log.d(TAG, "video size is updated! steps: " + steps + ", stepsize: " + stepSize);	    
+	    mScript.set_steps(steps);
+	    mScript.set_stepSize(stepSize);
+	    mScript.set_YWidth(stepSize);
+	    mScript.set_YHeight(steps);
+
+            stepsAlloc.copyFrom(stepsTemp);
+	    stepSizeAlloc.copyFrom(stepSizeTemp);
+
+	    Type.Builder TBhist2D = new Type.Builder(mRS, Element.I32(mRS)).setX(256).setY(steps);
+	    Hist2D = Allocation.createTyped(mRS, TBhist2D.create(), Allocation.USAGE_SCRIPT);
+	    mScript.set_hist2D(Hist2D);
+
+	    Type.Builder TBYPanel = new Type.Builder(mRS, Element.U8(mRS)).setX(stepSize).setY(steps);
+	    YPanel = Allocation.createTyped(mRS, TBYPanel.create(), Allocation.USAGE_SCRIPT);
+	    mScript.set_yPanel(YPanel);
+
+        }
+
+	if(steps == -1 || stepSize == -1){
+	    Log.d(TAG, "scan frame before *step* and *stepSize* are set");
+	    return -1;
+	}
+
+	if(YPanel == null){
+	    Log.e(TAG, "YPanel is null!!!!! why!!!!");
+	    return -1;
+	}
+
+        //	Log.d(TAG, "step: " + mScript.get_steps() + ", stepSize: " + mScript.get_stepSize());
+	byte[] ydata = frame.getYData();
+	//	Log.d(TAG, "ydata(size: " + steps + "*" + stepSize + ", " + ydata.length + ") : " + ydata[0] + ", " + ydata[1]);
+
+	YPanel.copyFromUnchecked(ydata);
+	//	Log.d(TAG, "after copying");
+
+	int[] hist = new int[256];
+ 	int sum;
+
+	lo.setX(0,1).setY(0,steps);
+	mScript.forEach_hist1111(YPanel, lo);
+        mScript.forEach_hist2(Hist);
+
+	// // Hist.copyTo(hist);
+	// // sum = 0;
+	// // for(int e : hist)
+	// //     sum += e;
+
+        mScript.invoke_setTouchRoof();
+	maxValue.copyTo(maxL);
+
+	//	Log.d(TAG, "Hist[" + sum + "]: " + Arrays.toString(hist));
+	frame.setMaxY(maxL[0]);
+
+	/*
+	mScript.invoke_histclr();
+
+        Hist.copyTo(hist);
+	sum = 0;
+	for(int e : hist)
+	    sum += e;
+        Log.d(TAG, "Hist[" + sum + "]: " + Arrays.toString(hist));
+        mScript.forEach_histnew(YPanel);
+
+	// mScript.invoke_setTouchRoof();
+	// maxValue.copyTo(maxL);
+
+	Hist.copyTo(hist);
+	sum = 0;
+	for(int e : hist)
+	    sum += e;
+	Log.d(TAG, "Hist[" + sum + "]: " + Arrays.toString(hist));
+
+	*/
+
+        // frame.setMaxY(maxL[0]);
+        return maxL[0];
+    }
 }

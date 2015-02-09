@@ -208,6 +208,7 @@ public class MediaCodecVideoEncoder {
       boolean isKeyframe, int inputBuffer, int size,
       long presentationTimestampUs) {
     checkOnMediaCodecThread();
+    Log.d("==MBX==", "MediaCodecVideoEncoder.encode()  is invoked");
     try {
       if (isKeyframe) {
         // Ideally MediaCodec would honor BUFFER_FLAG_SYNC_FRAME so we could

@@ -37,6 +37,10 @@
 #include "webrtc/base/scoped_ptr.h"
 #include "webrtc/base/sigslot.h"
 
+// =MBX= <<
+#include "talk/media/base/videoprocessor.h"
+// =MBX= >>
+
 // VideoSource implements VideoSourceInterface. It owns a
 // cricket::VideoCapturer and make sure the camera is started at a resolution
 // that honors the constraints.
@@ -53,6 +57,15 @@ class ChannelManager;
 namespace webrtc {
 
 class MediaConstraintsInterface;
+
+// =MBX= <<
+class ScanVideoProcessor : public cricket::VideoProcessor{
+
+public:
+  virtual ~ScanVideoProcessor() {}
+  virtual void OnFrame(uint32 ssrc, cricket::VideoFrame* frame, bool* drop_frame);
+};
+// =MBX= >>
 
 class VideoSource : public Notifier<VideoSourceInterface>,
                     public sigslot::has_slots<> {
@@ -77,6 +90,12 @@ class VideoSource : public Notifier<VideoSourceInterface>,
   // is running video frames.
   virtual void AddSink(cricket::VideoRenderer* output);
   virtual void RemoveSink(cricket::VideoRenderer* output);
+
+  // =MBX= <<
+  virtual void AddProcessor(cricket::VideoProcessor* processor);
+  virtual void RemoveProcessor(cricket::VideoProcessor* processor);
+  // =MBX= >>
+
 
  protected:
   VideoSource(cricket::ChannelManager* channel_manager,
