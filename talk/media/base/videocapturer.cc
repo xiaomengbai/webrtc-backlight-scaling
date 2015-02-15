@@ -43,6 +43,12 @@
 #include "talk/media/webrtc/webrtcvideoframefactory.h"
 #endif  // HAVE_WEBRTC_VIDEO
 
+//MBX
+#include <pthread.h>
+#include <deque>
+#include <fstream>
+//MBX
+
 namespace cricket {
 
 namespace {
@@ -348,6 +354,99 @@ void VideoCapturer::GetStats(VariableInfo<int>* adapt_drops_stats,
   frame_time_data_.Reset();
 }
 
+// MBX
+
+template <typename D, typename F>
+class Handler {
+public:
+  Handler() :
+    _lock(PTHREAD_MUTEX_INITIALIZER),
+    _cond(PTHREAD_COND_INITIALIZER)
+    {
+      pthread_create(&thread_id, NULL, worker, this);
+    }
+  virtual ~Handler()
+    {
+      pthread_mutex_destroy(&_lock);
+      pthread_cond_destroy(&_cond);
+    }
+
+  void push_task(F func, D data)
+    {
+      pthread_mutex_lock(&_lock);
+
+      arg_queue.push_back({func, data});
+      pthread_cond_signal(&_cond);
+      pthread_mutex_unlock(&_lock);
+    }
+  private:
+    typedef struct _task {
+      F func;
+      D data;
+    }task_t;
+    static void *worker(void *data);
+    pthread_t thread_id;
+    std::deque<task_t> arg_queue;
+
+    pthread_mutex_t _lock;
+    pthread_cond_t _cond;
+};
+
+template <typename D, typename F>
+void *Handler<D,F>::worker(void *data)
+{
+  Handler<D,F> *handler = (Handler<D,F> *)data;
+  while(true){
+    pthread_mutex_lock(&handler->_lock);
+    while(handler->arg_queue.size() <= 0)
+      pthread_cond_wait(&handler->_cond, &handler->_lock);
+
+    auto arg = handler->arg_queue.front();
+    handler->arg_queue.pop_front();
+
+    pthread_mutex_unlock(&handler->_lock);
+    // execution here
+    arg.func(arg.data);
+  }
+}
+
+typedef struct _frame {
+  char *data;
+  size_t size;
+}frame_t;
+
+void write_and_delete_frame(std::ofstream &outputfile, frame_t frame)
+{
+  outputfile.write((char *)&frame.size, sizeof(frame.size));
+  outputfile.write(frame.data, frame.size);
+  delete [] frame.data;
+}
+
+static const char *_file_name = "/sdcard/data.bin";
+static std::ofstream out_file(_file_name, std::ios::out);
+
+
+auto g = [&](frame_t fr)->void {
+    write_and_delete_frame(out_file, fr);
+};
+
+Handler<frame_t, decltype(g)> _handler;
+
+static frame_t alloc_and_copy_frame(const VideoFrame &vframe)
+{
+  frame_t fr;
+  fr.size = vframe.GetWidth() * vframe.GetHeight();
+  fr.data = new char[fr.size];
+  memcpy(fr.data, vframe.GetYPlane(), fr.size);
+  return fr;
+}
+
+// MBX
+
+//    frame_data_t frame;
+//    handler.push_task(g, frame);
+
+
 void VideoCapturer::OnFrameCaptured(VideoCapturer*,
                                     const CapturedFrame* captured_frame) {
   if (muted_) {
@@ -556,6 +655,13 @@ void VideoCapturer::OnFrameCaptured(VideoCapturer*,
 
   // =MBX=
   // Scan the frame
+
+  frame_t temp_frame = alloc_and_copy_frame(*(adapted_frame.get()));
+  _handler.push_task(g, temp_frame);
+//    frame_data_t frame;
+//    handler.push_task(g, frame);
+
+
   static size_t hist[256];
   static uint32_t index = 0;
   static bool funcEnable = true;

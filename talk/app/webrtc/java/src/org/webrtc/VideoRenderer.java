@@ -62,6 +62,7 @@ public class VideoRenderer {
     public int adjustLum;
     public int idx;
     public boolean isScan;
+    public float yScaleFactor = 1.0f;
 
     private void setLumCandStPos(int width){
       maxLumCandStPos = new int[]{width + 1, width * 2 + 1, width * 3 + 1, width * 4 + 1};
@@ -206,7 +207,7 @@ public class VideoRenderer {
       @Override
       public String toString() {
           return idx + ": " + width + "x" + height + ":" + yuvStrides[0] + ":" + yuvStrides[1] +
-              ":" + yuvStrides[2] + ", isScan: " + isScan + ", maxY: " + maxY + ", adjustLum: " + adjustLum;
+              ":" + yuvStrides[2] + ", isScan: " + isScan + ", maxY: " + maxY + ", adjustLum: " + adjustLum + "\n";
       }
 
     // Copy the bytes out of |src| and into |dst|, ignoring and overwriting

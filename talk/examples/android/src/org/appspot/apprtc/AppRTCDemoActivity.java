@@ -516,9 +516,9 @@ public class AppRTCDemoActivity extends Activity
       stat += "Actual BR: " + actualBitrate;
     }
 
-    // Window w = getWindow();
-    // WindowManager.LayoutParams lp = w.getAttributes();
-    // updatedBacklight = new Double(lp.screenBrightness);
+    Window w = getWindow();
+    WindowManager.LayoutParams lp = w.getAttributes();
+    updatedBacklight = new Double(lp.screenBrightness);
 
     stat += "\nBacklight: " + updatedBacklight;
     encoderStatView.setText(stat);
@@ -687,6 +687,15 @@ public class AppRTCDemoActivity extends Activity
             synchronized(this){
                 for(int i = 0; i < idx.size(); i++)
                     backlightMap.put(idx.get(i), bl.get(i));
+            }
+        }
+    }
+
+    @Override
+    public void clearBacklight(){
+        if(funcEnable){
+            synchronized(this){
+                backlightMap.clear();
             }
         }
     }

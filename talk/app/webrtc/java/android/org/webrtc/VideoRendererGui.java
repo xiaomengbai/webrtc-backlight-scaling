@@ -108,12 +108,18 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
       "uniform sampler2D y_tex;\n" +
       "uniform sampler2D u_tex;\n" +
       "uniform sampler2D v_tex;\n" +
+// MBX
+      "uniform float scale_y;\n" +
+// MBX
       "\n" +
       "void main() {\n" +
       // CSC according to http://www.fourcc.org/fccyvrgb.php
       "  float y = texture2D(y_tex, interp_tc).r;\n" +
       "  float u = texture2D(u_tex, interp_tc).r - 0.5;\n" +
       "  float v = texture2D(v_tex, interp_tc).r - 0.5;\n" +
+// MBX
+      " y = clamp(y * scale_y, 0.0, 1.0);\n" +
+// MBX
       "  gl_FragColor = vec4(y + 1.403 * v, " +
       "                      y - 0.344 * u - 0.714 * v, " +
       "                      y + 1.77 * u, 1);\n" +
@@ -180,7 +186,7 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     }
     checkNoGLES2Error();
     return shader;
-}
+  }
 
 
   private int createProgram(String vertexSource, String fragmentSource) {
@@ -204,13 +210,14 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     }
     checkNoGLES2Error();
     return program;
-}
+  }
 
-    public interface frameProcess {
-        public int scanMaxY(I420Frame frame);
-        public void updateBacklight(ArrayList<Integer> idx, ArrayList<Double> bl);
-        public void tryScaleBacklight(int index);
-    }
+  public interface frameProcess {
+    public int scanMaxY(I420Frame frame);
+    public void updateBacklight(ArrayList<Integer> idx, ArrayList<Double> bl);
+    public void tryScaleBacklight(int index);
+    public void clearBacklight();
+  }
 
 
   /**
@@ -244,17 +251,21 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
       if(DBFLAG) Log.d(tag, s);
     }
 
-      // =MBX=
+    // =MBX=
 
-      private DynamicProgramming DP;
-      private int sampleRate = 5;
-      private int renderIdx;
-      static private boolean funcEnable = true;
-      {
-          DP = new DynamicProgramming(0.004, sampleRate * 0.004, 0.4, 1.0);
-      }
+    private DynamicProgramming DP;
+    private int sampleRate = 5;
+    private int renderIdx;
+    private final static int ALG_DP = 0;
+    private final static int ALG_GREEDY = 1;
+    private final int algChosen = ALG_DP;
+    private static boolean funcEnable = true;
+    private Double lastBacklight = 1.0;
+    {
+      DP = new DynamicProgramming(0.004, sampleRate * 0.004, 0.4, 1.0);
+    }
 
-      //=MBX=
+    //=MBX=
 
     // Render frame queue - accessed by two threads. renderFrame() call does
     // an offer (writing I420Frame to render) and early-returns (recording
@@ -466,7 +477,7 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
           GLES20.glUseProgram(yuvProgram);
 
           //=MBX=
-          if(funcEnable && frameFromQueue != null){
+          if(funcEnable && frameFromQueue != null && !mirror){
               callbacks.tryScaleBacklight(frameFromQueue.idx);
           }
           //=MBX=
@@ -510,6 +521,12 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
         GLES20.glUniform1i(GLES20.glGetUniformLocation(yuvProgram, "y_tex"), 0);
         GLES20.glUniform1i(GLES20.glGetUniformLocation(yuvProgram, "u_tex"), 1);
         GLES20.glUniform1i(GLES20.glGetUniformLocation(yuvProgram, "v_tex"), 2);
+        float scaley = 1.0f;
+        if(frameFromQueue != null & !mirror){
+            scaley = frameFromQueue.yScaleFactor;
+            Log.d(TAG, ">>>>>>>>>>>>>>> Scale to " + scaley);
+        }
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(yuvProgram, "scale_y"), scaley);
       }
 
       int posLocation = GLES20.glGetAttribLocation(yuvProgram, "in_pos");
@@ -592,6 +609,8 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
       //=MBX=
       frameIdx = 0;
       renderIdx = 0;
+      //lastBacklight = 1.0;
+      callbacks.clearBacklight();
       //=MBX=
       videoWidth = width;
       videoHeight = height;
@@ -730,14 +749,16 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
 	    frameIdx++;
 	    frameIdx %= frameNrHold;
             ***/
-          frameToRender.idx = frameIdx;
-          ++frameIdx;
           frameDPQueue.offer(frameToRender);
-            /***
-	    mLog("******************", frameToRender.toString());
-            mLog("**********************", "frame DP queue size: " + frameDPQueue.size());
-            ***/
-          if(frameDPQueue.size() < frameNrHold && funcEnable)
+
+          int queueSize = 1;
+          if(algChosen == ALG_DP){
+              queueSize = frameNrHold;
+          }else{
+              queueSize = sampleRate;
+          }
+
+          if(frameDPQueue.size() < queueSize && funcEnable)
             return;
 
           if(funcEnable){
@@ -746,15 +767,25 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
               Iterator<I420Frame> iter = frameDPQueue.iterator();
               while(iter.hasNext()){
                   I420Frame fr = iter.next();
+                  fr.idx = frameIdx;
+                  ++frameIdx;
                   if(frameIdx % sampleRate == 0){
                       backlights.add(fr.getMaxLum(0) / 255.0);
                       indices.add(fr.idx);
                   }
               }
 
-              Log.d(TAG, "Before Dynamic Programming: " + backlights);
-              backlights = DP.runDP(backlights);
-              Log.d(TAG, "After Dynamic Programming: " + backlights);
+              Log.d(TAG, "Before Dynamic/Greedy Programming("+ lastBacklight +"): " + backlights + indices);
+              if(algChosen == ALG_DP){
+                  backlights = DP.runDP(backlights, lastBacklight);
+              }else if(algChosen == ALG_GREEDY){
+                  backlights = DP.runGreedy(backlights, lastBacklight);
+              }
+              setYScale(frameDPQueue, backlights, indices, lastBacklight);
+              if(backlights.size() > 0)
+                  lastBacklight = backlights.get(backlights.size() - 1);
+
+              Log.d(TAG, "After Dynamic/Greedy Programming("+ lastBacklight +"): " + backlights + indices);
 
               // put the (index, backlight) to map in main Activity
               callbacks.updateBacklight(indices, backlights);
@@ -781,6 +812,32 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
       surface.requestRender();
     }
 
+      // MBX
+      static void setYScale(LinkedBlockingQueue<I420Frame> frames,
+                            ArrayList<Double> backlights,
+                            ArrayList<Integer> indices,
+                            Double oldBacklight){
+
+          StringBuilder builder = new StringBuilder();
+
+          int i = 0;
+          double old = oldBacklight.doubleValue();
+          Iterator<I420Frame> iterFrame = frames.iterator();
+          while(iterFrame.hasNext()){
+              I420Frame frame = iterFrame.next();
+              if(frame.idx >= indices.get(i)){
+                  old = backlights.get(i);
+                  i++;
+              }
+              frame.yScaleFactor = (float)(1.0 / old);
+              builder.append(frame.yScaleFactor + ",");
+          }
+          // Log.d(TAG, "<<<<<<<<<<<<<< indices: " + indices);
+          // Log.d(TAG, "<<<<<<<<<<<<<< backlights: " + backlights);
+          // Log.d(TAG, "<<<<<<<<<<<<<< frames: " + frames);
+          // Log.d(TAG, "<<<<<<<<<<<<<< Scale from: " + builder.toString());
+      }
+      //MBX
       private class DynamicProgramming {
           /*
            * Dynamic Programming
@@ -822,15 +879,15 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
               this(g, d, 0.0, 1.0);
           }
 
-          public ArrayList<Double> runGreedy(ArrayList<Double> vals){
+          public ArrayList<Double> runGreedy(ArrayList<Double> vals, Double oldValue){
 
               // filter the values less then minVal
               ListIterator<Double> iter = vals.listIterator();
-              Double old = vals.get(0);
+              double old = oldValue.doubleValue();
               while(iter.hasNext()){
                   Double v = iter.next();
-                  Double min = Math.max(minVal, old - deltaNr * granularity);
-                  Double max = Math.min(maxVal, old + deltaNr * granularity);
+                  double min = Math.max(minVal, old - deltaNr * granularity);
+                  double max = Math.min(maxVal, old + deltaNr * granularity);
                   if(v <= min) v = min;
                   else if(v >= max) v = max;
                   else v = (int)(v / granularity) * granularity;
@@ -841,10 +898,13 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
               return vals;
           }
 
-          public ArrayList<Double> runDP(ArrayList<Double> vals){
-              resCache = new Double[vals.size()][valNr];
-              choiceCache = new Integer[vals.size()][valNr];
+          public ArrayList<Double> runDP(ArrayList<Double> vals, Double oldValue){
+              resCache = new Double[vals.size() + 1][valNr];
+              choiceCache = new Integer[vals.size() + 1][valNr];
 
+              int oldLvl = (int)(oldValue / granularity);
+              if(oldLvl != (oldValue / granularity))
+                  ++oldLvl;
 
               // initialize the mediate results
               for(Double[] sub : resCache)
@@ -860,13 +920,18 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
                       iter.set(0.4);
               }
 
-              for(int i = 0; i < valNr; i++)
-                  resCache[0][i] = granularity * i + minVal;
 
-              for(int i = 1; i < vals.size(); i++){
+              for(int i = 0; i < valNr; i++){
+                  if(i < oldLvl)
+                      resCache[0][i] = -1.0;
+                  else
+                      resCache[0][i] = granularity * i + minVal;
+              }
+
+              for(int i = 1; i < vals.size() + 1; i++){
                   for(int j = 0; j < valNr; j++){
                       double cand = j * granularity + minVal;
-                      if(cand < vals.get(i))
+                      if(cand < vals.get(i-1))
                           continue;
                       int st = Math.max((j - deltaNr), 0);
                       int ed = Math.min((j + deltaNr + 1), valNr);
@@ -885,8 +950,8 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
               minSum = -1.0;
               int candIdx = -1;
               for(int i = 0; i < valNr; i++){
-                  if(minSum == -1 || minSum > resCache[vals.size() - 1][i]){
-                      minSum = resCache[vals.size() - 1][i];
+                  if(minSum == -1 || minSum > resCache[vals.size()][i]){
+                      minSum = resCache[vals.size()][i];
                       candIdx = i;
                   }
               }
@@ -895,7 +960,7 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
                   Double[] newVals = new Double[vals.size()];
                   for(int i = vals.size() - 1; i >= 0; i--){
                       newVals[i] = candIdx * granularity + minVal;
-                      candIdx = choiceCache[i][candIdx];
+                      candIdx = choiceCache[i+1][candIdx];
                   }
                   vals = new ArrayList<Double>(Arrays.asList(newVals));
               }
