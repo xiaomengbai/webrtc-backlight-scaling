@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2014, Google Inc.
+ * Copyright 2014 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -61,6 +61,7 @@ import android.os.Handler;
  */
 public class VideoRendererGui implements GLSurfaceView.Renderer {
   private static VideoRendererGui instance = null;
+  private static Runnable eglContextReady = null;
   private static final String TAG = "VideoRendererGui";
   private GLSurfaceView surface;
   private static EGLContext eglContext = null;
@@ -674,9 +675,9 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
       }
       // Check input frame parameters.
       if (frame.yuvFrame) {
-        if (!(frame.yuvStrides[0] == frame.width &&
-            frame.yuvStrides[1] == frame.width / 2 &&
-            frame.yuvStrides[2] == frame.width / 2)) {
+        if (frame.yuvStrides[0] < frame.width ||
+            frame.yuvStrides[1] < frame.width / 2 ||
+            frame.yuvStrides[2] < frame.width / 2) {
           Log.e(TAG, "Incorrect strides " + frame.yuvStrides[0] + ", " +
               frame.yuvStrides[1] + ", " + frame.yuvStrides[2]);
           return;
@@ -975,9 +976,11 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
 
 
   /** Passes GLSurfaceView to video renderer. */
-  public static void setView(GLSurfaceView surface) {
+  public static void setView(GLSurfaceView surface,
+      Runnable eglContextReadyCallback) {
     Log.d(TAG, "VideoRendererGui.setView");
     instance = new VideoRendererGui(surface);
+    eglContextReady = eglContextReadyCallback;
   }
 
   public static EGLContext getEGLContext() {
@@ -1067,10 +1070,23 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     }
   }
 
+  public static void remove(VideoRenderer.Callbacks renderer) {
+    Log.d(TAG, "VideoRendererGui.remove");
+    if (instance == null) {
+      throw new RuntimeException(
+          "Attempt to remove yuv renderer before setting GLSurfaceView");
+    }
+    synchronized (instance.yuvImageRenderers) {
+      if (!instance.yuvImageRenderers.remove(renderer)) {
+        Log.w(TAG, "Couldn't remove renderer (not present in current list)");
+      }
+    }
+  }
+
   @Override
   public void onSurfaceCreated(GL10 unused, EGLConfig config) {
     Log.d(TAG, "VideoRendererGui.onSurfaceCreated");
-    // Store render EGL context
+    // Store render EGL context.
     if (CURRENT_SDK_VERSION >= EGL14_SDK_VERSION) {
       eglContext = EGL14.eglGetCurrentContext();
       Log.d(TAG, "VideoRendererGui EGL Context: " + eglContext);
@@ -1091,6 +1107,11 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     }
     checkNoGLES2Error();
     GLES20.glClearColor(0.15f, 0.15f, 0.15f, 1.0f);
+
+    // Fire EGL context ready event.
+    if (eglContextReady != null) {
+      eglContextReady.run();
+    }
   }
 
   @Override

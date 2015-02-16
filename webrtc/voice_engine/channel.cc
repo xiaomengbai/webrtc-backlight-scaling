@@ -101,7 +101,7 @@ class VoEBitrateObserver : public BitrateObserver {
   // Implements BitrateObserver.
   virtual void OnNetworkChanged(const uint32_t bitrate_bps,
                                 const uint8_t fraction_lost,
-                                const uint32_t rtt) OVERRIDE {
+                                const int64_t rtt) OVERRIDE {
     // |fraction_lost| has a scale of 0 - 255.
     owner_->OnNetworkChanged(bitrate_bps, fraction_lost, rtt);
   }
@@ -410,7 +410,7 @@ Channel::OnReceivedPayloadData(const uint8_t* payloadData,
     UpdatePacketDelay(rtpHeader->header.timestamp,
                       rtpHeader->header.sequenceNumber);
 
-    uint16_t round_trip_time = 0;
+    int64_t round_trip_time = 0;
     _rtpRtcpModule->RTT(rtp_receiver_->SSRC(), &round_trip_time,
                         NULL, NULL, NULL);
 
@@ -1330,10 +1330,10 @@ Channel::SetSendCodec(const CodecInst& codec)
 void
 Channel::OnNetworkChanged(const uint32_t bitrate_bps,
                           const uint8_t fraction_lost,  // 0 - 255.
-                          const uint32_t rtt) {
+                          const int64_t rtt) {
   WEBRTC_TRACE(kTraceInfo, kTraceVoice, VoEId(_instanceId,_channelId),
-      "Channel::OnNetworkChanged(bitrate_bps=%d, fration_lost=%d, rtt=%d)",
-      bitrate_bps, fraction_lost, rtt);
+      "Channel::OnNetworkChanged(bitrate_bps=%d, fration_lost=%d, rtt=%" PRId64
+      ")", bitrate_bps, fraction_lost, rtt);
   // |fraction_lost| from BitrateObserver is short time observation of packet
   // loss rate from past. We use network predictor to make a more reasonable
   // loss rate estimation.
@@ -1352,6 +1352,7 @@ Channel::SetVADStatus(bool enableVAD, ACMVADMode mode, bool disableDTX)
 {
     WEBRTC_TRACE(kTraceInfo, kTraceVoice, VoEId(_instanceId,_channelId),
                  "Channel::SetVADStatus(mode=%d)", mode);
+    assert(!(disableDTX && enableVAD));  // disableDTX mode is deprecated.
     // To disable VAD, DTX must be disabled too
     disableDTX = ((enableVAD == false) ? true : disableDTX);
     if (audio_coding_->SetVAD(!disableDTX, enableVAD, mode) != 0)
@@ -1654,8 +1655,8 @@ bool Channel::ReceivePacket(const uint8_t* packet,
                             size_t packet_length,
                             const RTPHeader& header,
                             bool in_order) {
-  if (rtp_payload_registry_->IsEncapsulated(header)) {
-    return HandleEncapsulation(packet, packet_length, header);
+  if (rtp_payload_registry_->IsRtx(header)) {
+    return HandleRtxPacket(packet, packet_length, header);
   }
   const uint8_t* payload = packet + header.headerLength;
   assert(packet_length >= header.headerLength);
@@ -1669,9 +1670,9 @@ bool Channel::ReceivePacket(const uint8_t* packet,
                                           payload_specific, in_order);
 }
 
-bool Channel::HandleEncapsulation(const uint8_t* packet,
-                                  size_t packet_length,
-                                  const RTPHeader& header) {
+bool Channel::HandleRtxPacket(const uint8_t* packet,
+                              size_t packet_length,
+                              const RTPHeader& header) {
   if (!rtp_payload_registry_->IsRtx(header))
     return false;
 
@@ -1717,7 +1718,7 @@ bool Channel::IsPacketRetransmitted(const RTPHeader& header,
   if (!statistician)
     return false;
   // Check if this is a retransmission.
-  uint16_t min_rtt = 0;
+  int64_t min_rtt = 0;
   _rtpRtcpModule->RTT(rtp_receiver_->SSRC(), NULL, NULL, &min_rtt, NULL);
   return !in_order &&
       statistician->IsRetransmitOfOldPacket(header, min_rtt);
@@ -1745,7 +1746,7 @@ int32_t Channel::ReceivedRTCPPacket(const int8_t* data, size_t length) {
 
   {
     CriticalSectionScoped lock(ts_stats_lock_.get());
-    uint16_t rtt = GetRTT();
+    int64_t rtt = GetRTT();
     if (rtt == 0) {
       // Waiting for valid RTT.
       return 0;
@@ -3218,7 +3219,7 @@ Channel::GetRTPStatistics(CallStatistics& stats)
                    "GetRTPStatistics() failed to get RTT");
     } else {
       WEBRTC_TRACE(kTraceStateInfo, kTraceVoice, VoEId(_instanceId, _channelId),
-                   "GetRTPStatistics() => rttMs=%d", stats.rttMs);
+                   "GetRTPStatistics() => rttMs=%" PRId64, stats.rttMs);
     }
 
     // --- Data counters
@@ -3305,6 +3306,7 @@ Channel::GetREDStatus(bool& enabled, int& redPayloadtype)
                 "module");
             return -1;
         }
+        redPayloadtype = payloadType;
         WEBRTC_TRACE(kTraceStateInfo, kTraceVoice,
                    VoEId(_instanceId, _channelId),
                    "GetREDStatus() => enabled=%d, redPayloadtype=%d",
@@ -4134,47 +4136,6 @@ Channel::RegisterReceiveCodecsToRTPModule()
     }
 }
 
-int Channel::SetSecondarySendCodec(const CodecInst& codec,
-                                   int red_payload_type) {
-  // Sanity check for payload type.
-  if (red_payload_type < 0 || red_payload_type > 127) {
-    _engineStatisticsPtr->SetLastError(
-        VE_PLTYPE_ERROR, kTraceError,
-        "SetRedPayloadType() invalid RED payload type");
-    return -1;
-  }
-
-  if (SetRedPayloadType(red_payload_type) < 0) {
-    _engineStatisticsPtr->SetLastError(
-        VE_AUDIO_CODING_MODULE_ERROR, kTraceError,
-        "SetSecondarySendCodec() Failed to register RED ACM");
-    return -1;
-  }
-  if (audio_coding_->RegisterSecondarySendCodec(codec) < 0) {
-    _engineStatisticsPtr->SetLastError(
-        VE_AUDIO_CODING_MODULE_ERROR, kTraceError,
-        "SetSecondarySendCodec() Failed to register secondary send codec in "
-        "ACM");
-    return -1;
-  }
-
-  return 0;
-}
-
-void Channel::RemoveSecondarySendCodec() {
-  audio_coding_->UnregisterSecondarySendCodec();
-}
-
-int Channel::GetSecondarySendCodec(CodecInst* codec) {
-  if (audio_coding_->SecondarySendCodec(codec) < 0) {
-    _engineStatisticsPtr->SetLastError(
-        VE_AUDIO_CODING_MODULE_ERROR, kTraceError,
-        "GetSecondarySendCodec() Failed to get secondary sent codec from ACM");
-    return -1;
-  }
-  return 0;
-}
-
 // Assuming this method is called with valid payload type.
 int Channel::SetRedPayloadType(int red_payload_type) {
   CodecInst codec;
@@ -4245,7 +4206,7 @@ int32_t Channel::GetPlayoutFrequency() {
   return playout_frequency;
 }
 
-int Channel::GetRTT() const {
+int64_t Channel::GetRTT() const {
   RTCPMethod method = _rtpRtcpModule->RTCP();
   if (method == kRtcpOff) {
     return 0;
@@ -4269,15 +4230,15 @@ int Channel::GetRTT() const {
     // the SSRC of the other end.
     remoteSSRC = report_blocks[0].remoteSSRC;
   }
-  uint16_t rtt = 0;
-  uint16_t avg_rtt = 0;
-  uint16_t max_rtt= 0;
-  uint16_t min_rtt = 0;
+  int64_t rtt = 0;
+  int64_t avg_rtt = 0;
+  int64_t max_rtt= 0;
+  int64_t min_rtt = 0;
   if (_rtpRtcpModule->RTT(remoteSSRC, &rtt, &avg_rtt, &min_rtt, &max_rtt)
       != 0) {
     return 0;
   }
-  return static_cast<int>(rtt);
+  return rtt;
 }
 
 }  // namespace voe

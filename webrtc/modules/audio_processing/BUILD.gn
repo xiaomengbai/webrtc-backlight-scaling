@@ -76,8 +76,6 @@ source_set("audio_processing") {
     "beamformer/covariance_matrix_generator.cc",
     "beamformer/covariance_matrix_generator.h",
     "beamformer/matrix.h",
-    "channel_buffer.cc",
-    "channel_buffer.h",
     "common.h",
     "echo_cancellation_impl.cc",
     "echo_cancellation_impl.h",
@@ -120,8 +118,6 @@ source_set("audio_processing") {
     "utility/delay_estimator_wrapper.h",
     "utility/fft4g.c",
     "utility/fft4g.h",
-    "utility/ring_buffer.c",
-    "utility/ring_buffer.h",
     "voice_detection_impl.cc",
     "voice_detection_impl.h",
   ]
@@ -172,6 +168,7 @@ source_set("audio_processing") {
   }
 
   if (rtc_use_openmax_dl) {
+    defines += [ "WEBRTC_BEAMFORMER" ]
     sources += [
       "beamformer/beamformer.cc",
       "beamformer/beamformer.h",

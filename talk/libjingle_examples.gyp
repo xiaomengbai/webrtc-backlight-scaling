@@ -1,6 +1,6 @@
 #
 # libjingle
-# Copyright 2012, Google Inc.
+# Copyright 2012 Google Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
@@ -23,7 +23,6 @@
 # WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
 
 {
   'includes': [
@@ -148,28 +147,96 @@
 
     ['OS=="ios" or (OS=="mac" and target_arch!="ia32" and mac_sdk>="10.8")', {
       'targets': [
+        { 'target_name': 'apprtc_signaling',
+          'type': 'static_library',
+          'dependencies': [
+            'libjingle.gyp:libjingle_peerconnection_objc',
+            'socketrocket',
+          ],
+          'sources': [
+            'examples/objc/AppRTCDemo/ARDAppClient.h',
+            'examples/objc/AppRTCDemo/ARDAppClient.m',
+            'examples/objc/AppRTCDemo/ARDAppClient+Internal.h',
+            'examples/objc/AppRTCDemo/ARDAppEngineClient.h',
+            'examples/objc/AppRTCDemo/ARDAppEngineClient.m',
+            'examples/objc/AppRTCDemo/ARDCEODTURNClient.h',
+            'examples/objc/AppRTCDemo/ARDCEODTURNClient.m',
+            'examples/objc/AppRTCDemo/ARDJoinResponse.h',
+            'examples/objc/AppRTCDemo/ARDJoinResponse.m',
+            'examples/objc/AppRTCDemo/ARDJoinResponse+Internal.h',
+            'examples/objc/AppRTCDemo/ARDMessageResponse.h',
+            'examples/objc/AppRTCDemo/ARDMessageResponse.m',
+            'examples/objc/AppRTCDemo/ARDMessageResponse+Internal.h',
+            'examples/objc/AppRTCDemo/ARDRoomServerClient.h',
+            'examples/objc/AppRTCDemo/ARDSignalingChannel.h',
+            'examples/objc/AppRTCDemo/ARDSignalingMessage.h',
+            'examples/objc/AppRTCDemo/ARDSignalingMessage.m',
+            'examples/objc/AppRTCDemo/ARDTURNClient.h',
+            'examples/objc/AppRTCDemo/ARDUtilities.h',
+            'examples/objc/AppRTCDemo/ARDUtilities.m',
+            'examples/objc/AppRTCDemo/ARDWebSocketChannel.h',
+            'examples/objc/AppRTCDemo/ARDWebSocketChannel.m',
+            'examples/objc/AppRTCDemo/RTCICECandidate+JSON.h',
+            'examples/objc/AppRTCDemo/RTCICECandidate+JSON.m',
+            'examples/objc/AppRTCDemo/RTCICEServer+JSON.h',
+            'examples/objc/AppRTCDemo/RTCICEServer+JSON.m',
+            'examples/objc/AppRTCDemo/RTCMediaConstraints+JSON.h',
+            'examples/objc/AppRTCDemo/RTCMediaConstraints+JSON.m',
+            'examples/objc/AppRTCDemo/RTCSessionDescription+JSON.h',
+            'examples/objc/AppRTCDemo/RTCSessionDescription+JSON.m',
+          ],
+          'include_dirs': [
+            'examples/objc/APPRTCDemo',
+          ],
+          'direct_dependent_settings': {
+            'include_dirs': [
+              'examples/objc/APPRTCDemo',
+            ],
+          },
+          'export_dependent_settings': [
+            'libjingle.gyp:libjingle_peerconnection_objc',
+          ],
+          'conditions': [
+            ['OS=="mac"', {
+              'xcode_settings': {
+                'MACOSX_DEPLOYMENT_TARGET' : '10.8',
+              },
+            }],
+          ],
+        },
         {
           'target_name': 'AppRTCDemo',
           'type': 'executable',
           'product_name': 'AppRTCDemo',
           'mac_bundle': 1,
           'dependencies': [
-            'libjingle.gyp:libjingle_peerconnection_objc',
-            'socketrocket',
+            'apprtc_signaling',
           ],
           'conditions': [
             ['OS=="ios"', {
               'mac_bundle_resources': [
-                'examples/objc/AppRTCDemo/ios/ResourceRules.plist',
-                'examples/objc/AppRTCDemo/ios/en.lproj/APPRTCViewController.xib',
+                'examples/objc/AppRTCDemo/ios/resources/Default-568h.png',
+                'examples/objc/AppRTCDemo/ios/resources/Roboto-Regular.ttf',
+                'examples/objc/AppRTCDemo/ios/resources/ic_call_end_black_24dp.png',
+                'examples/objc/AppRTCDemo/ios/resources/ic_call_end_black_24dp@2x.png',
+                'examples/objc/AppRTCDemo/ios/resources/ic_clear_black_24dp.png',
+                'examples/objc/AppRTCDemo/ios/resources/ic_clear_black_24dp@2x.png',
                 'examples/objc/Icon.png',
               ],
               'sources': [
-                'examples/objc/AppRTCDemo/ios/APPRTCAppDelegate.h',
-                'examples/objc/AppRTCDemo/ios/APPRTCAppDelegate.m',
-                'examples/objc/AppRTCDemo/ios/APPRTCViewController.h',
-                'examples/objc/AppRTCDemo/ios/APPRTCViewController.m',
+                'examples/objc/AppRTCDemo/ios/ARDAppDelegate.h',
+                'examples/objc/AppRTCDemo/ios/ARDAppDelegate.m',
+                'examples/objc/AppRTCDemo/ios/ARDMainView.h',
+                'examples/objc/AppRTCDemo/ios/ARDMainView.m',
+                'examples/objc/AppRTCDemo/ios/ARDMainViewController.h',
+                'examples/objc/AppRTCDemo/ios/ARDMainViewController.m',
+                'examples/objc/AppRTCDemo/ios/ARDVideoCallView.h',
+                'examples/objc/AppRTCDemo/ios/ARDVideoCallView.m',
+                'examples/objc/AppRTCDemo/ios/ARDVideoCallViewController.h',
+                'examples/objc/AppRTCDemo/ios/ARDVideoCallViewController.m',
                 'examples/objc/AppRTCDemo/ios/AppRTCDemo-Prefix.pch',
+                'examples/objc/AppRTCDemo/ios/UIImage+ARDUtilities.h',
+                'examples/objc/AppRTCDemo/ios/UIImage+ARDUtilities.m',
                 'examples/objc/AppRTCDemo/ios/main.m',
               ],
               'xcode_settings': {
@@ -199,34 +266,6 @@
               ],
             }],
           ],
-          'include_dirs': [
-            'examples/objc/APPRTCDemo',
-          ],
-          'sources': [
-            'examples/objc/AppRTCDemo/ARDAppClient.h',
-            'examples/objc/AppRTCDemo/ARDAppClient.m',
-            'examples/objc/AppRTCDemo/ARDMessageResponse.h',
-            'examples/objc/AppRTCDemo/ARDMessageResponse.m',
-            'examples/objc/AppRTCDemo/ARDRegisterResponse.h',
-            'examples/objc/AppRTCDemo/ARDRegisterResponse.m',
-            'examples/objc/AppRTCDemo/ARDSignalingMessage.h',
-            'examples/objc/AppRTCDemo/ARDSignalingMessage.m',
-            'examples/objc/AppRTCDemo/ARDUtilities.h',
-            'examples/objc/AppRTCDemo/ARDUtilities.m',
-            'examples/objc/AppRTCDemo/ARDWebSocketChannel.h',
-            'examples/objc/AppRTCDemo/ARDWebSocketChannel.m',
-            'examples/objc/AppRTCDemo/RTCICECandidate+JSON.h',
-            'examples/objc/AppRTCDemo/RTCICECandidate+JSON.m',
-            'examples/objc/AppRTCDemo/RTCICEServer+JSON.h',
-            'examples/objc/AppRTCDemo/RTCICEServer+JSON.m',
-            'examples/objc/AppRTCDemo/RTCMediaConstraints+JSON.h',
-            'examples/objc/AppRTCDemo/RTCMediaConstraints+JSON.m',
-            'examples/objc/AppRTCDemo/RTCSessionDescription+JSON.h',
-            'examples/objc/AppRTCDemo/RTCSessionDescription+JSON.m',
-          ],
-          'xcode_settings': {
-            'CLANG_ENABLE_OBJC_ARC': 'YES',
-          },
         },  # target AppRTCDemo
         {
           # TODO(tkchin): move this into the real third party location and
@@ -282,7 +321,7 @@
           ],
           'actions': [
             {
-              # TODO(fischman): convert from a custom script to a standard gyp
+              # TODO(glaznev): convert from a custom script to a standard gyp
               # apk build once chromium's apk-building gyp machinery can be used
               # (http://crbug.com/225101)
               'action_name': 'build_apprtcdemo_apk',
@@ -292,7 +331,6 @@
                 'examples/android/AndroidManifest.xml',
                 'examples/android/README',
                 'examples/android/ant.properties',
-                'examples/android/assets/channel.html',
                 'examples/android/third_party/autobanh/autobanh.jar',
                 'examples/android/build.xml',
                 'examples/android/jni/Android.mk',
@@ -317,26 +355,29 @@
                 'examples/android/res/drawable-xhdpi/ic_action_return_from_full_screen.png',
                 'examples/android/res/drawable-xhdpi/ic_loopback_call.png',
                 'examples/android/res/drawable-xhdpi/ic_launcher.png',
+                'examples/android/res/layout/activity_call.xml',
                 'examples/android/res/layout/activity_connect.xml',
-                'examples/android/res/layout/activity_fullscreen.xml',
-                'examples/android/res/layout/fragment_menubar.xml',
+                'examples/android/res/layout/fragment_call.xml',
                 'examples/android/res/menu/connect_menu.xml',
                 'examples/android/res/values/arrays.xml',
                 'examples/android/res/values/strings.xml',
                 'examples/android/res/xml/preferences.xml',
                 'examples/android/src/org/appspot/apprtc/AppRTCAudioManager.java',
                 'examples/android/src/org/appspot/apprtc/AppRTCClient.java',
-                'examples/android/src/org/appspot/apprtc/AppRTCDemoActivity.java',
                 'examples/android/src/org/appspot/apprtc/AppRTCProximitySensor.java',
+                'examples/android/src/org/appspot/apprtc/CallActivity.java',
+                'examples/android/src/org/appspot/apprtc/CallFragment.java',
                 'examples/android/src/org/appspot/apprtc/ConnectActivity.java',
                 'examples/android/src/org/appspot/apprtc/PeerConnectionClient.java',
                 'examples/android/src/org/appspot/apprtc/RoomParametersFetcher.java',
                 'examples/android/src/org/appspot/apprtc/SettingsActivity.java',
                 'examples/android/src/org/appspot/apprtc/SettingsFragment.java',
                 'examples/android/src/org/appspot/apprtc/UnhandledExceptionHandler.java',
-                'examples/android/src/org/appspot/apprtc/util/AppRTCUtils.java',
                 'examples/android/src/org/appspot/apprtc/WebSocketChannelClient.java',
                 'examples/android/src/org/appspot/apprtc/WebSocketRTCClient.java',
+                'examples/android/src/org/appspot/apprtc/util/AppRTCUtils.java',
+                'examples/android/src/org/appspot/apprtc/util/AsyncHttpURLConnection.java',
+                'examples/android/src/org/appspot/apprtc/util/LooperExecutor.java',
               ],
               'outputs': [
                 '<(PRODUCT_DIR)/AppRTCDemo-debug.apk',
@@ -362,6 +403,50 @@
             },
           ],
         },  # target AppRTCDemo
+      ],  # targets
+    }],  # OS=="android"
+
+    ['OS=="android"', {
+      'targets': [
+        {
+          'target_name': 'AppRTCDemoTest',
+          'type': 'none',
+          'dependencies': [
+            'AppRTCDemo',
+          ],
+          'actions': [
+            {
+              # TODO(glaznev): convert from a custom script to a standard gyp
+              # apk build once chromium's apk-building gyp machinery can be used
+              # (http://crbug.com/225101)
+              'action_name': 'build_apprtcdemotest_apk',
+              'inputs' : [
+                'examples/androidtests/AndroidManifest.xml',
+                'examples/androidtests/ant.properties',
+                'examples/androidtests/build.xml',
+                'examples/androidtests/project.properties',
+                'examples/androidtests/src/org/appspot/apprtc/test/LooperExecutorTest.java',
+                'examples/androidtests/src/org/appspot/apprtc/test/PeerConnectionClientTest.java',
+              ],
+              'outputs': [
+                '<(PRODUCT_DIR)/AppRTCDemoTest-debug.apk',
+              ],
+              'variables': {
+                'ant_log': '../../<(INTERMEDIATE_DIR)/ant.log', # ../.. to compensate for the cd examples/androidtests below.
+              },
+              'action': [
+                'bash', '-ec',
+                'mkdir -p <(INTERMEDIATE_DIR) && ' # Must happen _before_ the cd below
+                'cd examples/androidtests && '
+                '{ ANDROID_SDK_ROOT=<(android_sdk_root) '
+                'ant debug > <(ant_log) 2>&1 || '
+                '  { cat <(ant_log) ; exit 1; } } && '
+                'cd - > /dev/null && '
+                'cp examples/androidtests/bin/AppRTCDemoTest-debug.apk <(_outputs)'
+              ],
+            },
+          ],
+        },  # target AppRTCDemoTest
       ],  # targets
     }],  # OS=="android"
   ],

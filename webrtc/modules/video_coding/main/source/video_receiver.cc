@@ -168,7 +168,7 @@ int64_t VideoReceiver::TimeUntilNextProcess() {
   return timeUntilNextProcess;
 }
 
-int32_t VideoReceiver::SetReceiveChannelParameters(uint32_t rtt) {
+int32_t VideoReceiver::SetReceiveChannelParameters(int64_t rtt) {
   CriticalSectionScoped receiveCs(_receiveCritSect);
   _receiver.UpdateRtt(rtt);
   return 0;
@@ -365,7 +365,7 @@ int32_t VideoReceiver::Decode(uint16_t maxWaitTimeMs) {
 
     if (pre_decode_image_callback_) {
       EncodedImage encoded_image(frame->EncodedImage());
-      pre_decode_image_callback_->Encoded(encoded_image);
+      pre_decode_image_callback_->Encoded(encoded_image, NULL, NULL);
     }
 
 #ifdef DEBUG_DECODER_BIT_STREAM
@@ -467,6 +467,7 @@ int32_t VideoReceiver::Decode(const VCMEncodedFrame& frame) {
       case kKeyOnLoss: {
         request_key_frame = true;
         ret = VCM_OK;
+        break;
       }
       default:
         break;

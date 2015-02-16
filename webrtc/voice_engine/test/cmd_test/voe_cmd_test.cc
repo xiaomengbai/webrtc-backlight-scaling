@@ -233,6 +233,7 @@ void RunTest(std::string out_path) {
   bool muted = false;
   bool opus_stereo = false;
   bool experimental_ns_enabled = false;
+  bool debug_recording_started = false;
 
 #if defined(WEBRTC_ANDROID)
   std::string resource_path = "/sdcard/";
@@ -448,6 +449,7 @@ void RunTest(std::string out_path) {
       printf("%i. Set Opus maximum playback rate \n", option_index++);
       printf("%i. Set bit rate (only take effect on codecs that allow the "
              "change) \n", option_index++);
+      printf("%i. Toggle debug recording \n", option_index++);
 
       printf("Select action or %i to stop the call: ", option_index);
       int option_selection;
@@ -457,9 +459,14 @@ void RunTest(std::string out_path) {
       if (option_selection < option_index) {
         res = codec->GetCodec(option_selection, cinst);
         VALIDATE;
-        SetStereoIfOpus(opus_stereo, &cinst);
-        printf("Set primary codec\n");
-        res = codec->SetSendCodec(chan, cinst);
+        if (strcmp(cinst.plname, "red") == 0) {
+          printf("Enabling RED\n");
+          res = rtp_rtcp->SetREDStatus(chan, true, cinst.pltype);
+        } else {
+          SetStereoIfOpus(opus_stereo, &cinst);
+          printf("Set primary codec\n");
+          res = codec->SetSendCodec(chan, cinst);
+        }
         VALIDATE;
       } else if (option_selection == option_index++) {
         enable_cng = !enable_cng;
@@ -773,9 +780,23 @@ void RunTest(std::string out_path) {
         ASSERT_EQ(1, scanf("%i", &cinst.rate));
         res = codec->SetSendCodec(chan, cinst);
         VALIDATE;
+      } else if (option_selection == option_index++) {
+        const char* kDebugFileName = "audio.aecdump";
+        if (debug_recording_started) {
+          apm->StopDebugRecording();
+          printf("Debug recording named %s stopped\n", kDebugFileName);
+        } else {
+          apm->StartDebugRecording(kDebugFileName);
+          printf("Debug recording named %s started\n", kDebugFileName);
+        }
+        debug_recording_started = !debug_recording_started;
       } else {
         break;
       }
+    }
+
+    if (debug_recording_started) {
+      apm->StopDebugRecording();
     }
 
     if (send) {

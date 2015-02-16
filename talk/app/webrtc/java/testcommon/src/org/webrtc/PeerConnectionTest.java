@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2013, Google Inc.
+ * Copyright 2013 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -106,6 +106,7 @@ public class PeerConnectionTest {
     @Override
     public synchronized void onIceCandidate(IceCandidate candidate) {
       --expectedIceCandidates;
+
       // We don't assert expectedIceCandidates >= 0 because it's hard to know
       // how many to expect, in general.  We only use expectIceCandidates to
       // assert a minimal count.
@@ -508,6 +509,12 @@ public class PeerConnectionTest {
     //     EnumSet.of(Logging.TraceLevel.TRACE_ALL),
     //     Logging.Severity.LS_SENSITIVE);
 
+    // Allow loopback interfaces too since our Android devices often don't
+    // have those.
+    PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
+    options.networkIgnoreMask = 0;
+    factory.setOptions(options);
+
     MediaConstraints pcConstraints = new MediaConstraints();
     pcConstraints.mandatory.add(
         new MediaConstraints.KeyValuePair("DtlsSrtpKeyAgreement", "true"));
@@ -600,26 +607,6 @@ public class PeerConnectionTest {
     sdpLatch = new SdpObserverLatch();
     offeringExpectations.expectSignalingChange(SignalingState.STABLE);
     offeringExpectations.expectAddStream("answeredMediaStream");
-    offeringPC.setRemoteDescription(sdpLatch, answerSdp);
-    assertTrue(sdpLatch.await());
-    assertNull(sdpLatch.getSdp());
-
-    offeringExpectations.waitForAllExpectationsToBeSatisfied();
-    answeringExpectations.waitForAllExpectationsToBeSatisfied();
-
-    assertEquals(offeringPC.getLocalDescription().type, offerSdp.type);
-    assertEquals(offeringPC.getRemoteDescription().type, answerSdp.type);
-    assertEquals(answeringPC.getLocalDescription().type, answerSdp.type);
-    assertEquals(answeringPC.getRemoteDescription().type, offerSdp.type);
-
-    if (!RENDER_TO_GUI) {
-      // Wait for at least some frames to be delivered at each end (number
-      // chosen arbitrarily).
-      offeringExpectations.expectFramesDelivered(10);
-      answeringExpectations.expectFramesDelivered(10);
-      offeringExpectations.expectSetSize();
-      answeringExpectations.expectSetSize();
-    }
 
     offeringExpectations.expectIceConnectionChange(
         IceConnectionState.CHECKING);
@@ -634,6 +621,24 @@ public class PeerConnectionTest {
         IceConnectionState.CHECKING);
     answeringExpectations.expectIceConnectionChange(
         IceConnectionState.CONNECTED);
+
+    offeringPC.setRemoteDescription(sdpLatch, answerSdp);
+    assertTrue(sdpLatch.await());
+    assertNull(sdpLatch.getSdp());
+
+    assertEquals(offeringPC.getLocalDescription().type, offerSdp.type);
+    assertEquals(offeringPC.getRemoteDescription().type, answerSdp.type);
+    assertEquals(answeringPC.getLocalDescription().type, answerSdp.type);
+    assertEquals(answeringPC.getRemoteDescription().type, offerSdp.type);
+
+    if (!RENDER_TO_GUI) {
+      // Wait for at least some frames to be delivered at each end (number
+      // chosen arbitrarily).
+      offeringExpectations.expectFramesDelivered(10);
+      answeringExpectations.expectFramesDelivered(10);
+      offeringExpectations.expectSetSize();
+      answeringExpectations.expectSetSize();
+    }
 
     offeringExpectations.expectStateChange(DataChannel.State.OPEN);
     // See commentary about SCTP DataChannels above for why this is here.

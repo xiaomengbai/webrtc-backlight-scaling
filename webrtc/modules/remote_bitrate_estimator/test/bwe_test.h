@@ -18,105 +18,81 @@
 
 namespace webrtc {
 
-struct RemoteBitrateEstimatorFactory;
-
 namespace testing {
 namespace bwe {
 
-struct BweTestConfig {
-  struct EstimatorConfig {
-    EstimatorConfig()
-        : debug_name(),
-          flow_id(0),
-          estimator_factory(NULL),
-          control_type(kMimdControl),
-          update_baseline(false),
-          plot_delay(true),
-          plot_estimate(true) {
-    }
-    EstimatorConfig(std::string debug_name,
-                    int flow_id,
-                    const RemoteBitrateEstimatorFactory* estimator_factory,
-                    bool plot_delay,
-                    bool plot_estimate)
-        : debug_name(debug_name),
-          flow_id(flow_id),
-          estimator_factory(estimator_factory),
-          control_type(kMimdControl),
-          update_baseline(false),
-          plot_delay(plot_delay),
-          plot_estimate(plot_estimate) {
-    }
-    EstimatorConfig(std::string debug_name,
-                    int flow_id,
-                    const RemoteBitrateEstimatorFactory* estimator_factory,
-                    RateControlType control_type,
-                    bool plot_delay,
-                    bool plot_estimate)
-        : debug_name(debug_name),
-          flow_id(flow_id),
-          estimator_factory(estimator_factory),
-          control_type(control_type),
-          update_baseline(false),
-          plot_delay(plot_delay),
-          plot_estimate(plot_estimate) {
-    }
-    EstimatorConfig(std::string debug_name,
-                    int flow_id,
-                    const RemoteBitrateEstimatorFactory* estimator_factory,
-                    RateControlType control_type,
-                    bool update_baseline)
-        : debug_name(debug_name),
-          flow_id(flow_id),
-          estimator_factory(estimator_factory),
-          control_type(control_type),
-          update_baseline(update_baseline),
-          plot_delay(false),
-          plot_estimate(false) {
-    }
-    std::string debug_name;
-    int flow_id;
-    const RemoteBitrateEstimatorFactory* estimator_factory;
-    RateControlType control_type;
-    bool update_baseline;
-    bool plot_delay;
-    bool plot_estimate;
-  };
-
-  std::vector<EstimatorConfig> estimator_configs;
-};
-
-class TestedEstimator;
+class BweReceiver;
 class PacketProcessorRunner;
 
-class BweTest : public PacketProcessorListener {
+class PacketReceiver : public PacketProcessor {
  public:
-  BweTest();
-  virtual ~BweTest();
+  PacketReceiver(PacketProcessorListener* listener,
+                 int flow_id,
+                 BandwidthEstimatorType bwe_type,
+                 bool plot_delay,
+                 bool plot_bwe);
+  ~PacketReceiver();
 
-  virtual void AddPacketProcessor(PacketProcessor* processor, bool is_sender);
-  virtual void RemovePacketProcessor(PacketProcessor* processor);
+  // Implements PacketProcessor.
+  virtual void RunFor(int64_t time_ms, Packets* in_out) OVERRIDE;
+
+  void LogStats();
 
  protected:
-  void SetupTestFromConfig(const BweTestConfig& config);
+  void PlotDelay(int64_t arrival_time_ms, int64_t send_time_ms);
+
+  int64_t now_ms_;
+  std::string delay_log_prefix_;
+  int64_t last_delay_plot_ms_;
+  bool plot_delay_;
+  scoped_ptr<BweReceiver> bwe_receiver_;
+
+ private:
+  DISALLOW_IMPLICIT_CONSTRUCTORS(PacketReceiver);
+};
+
+class Link : public PacketProcessorListener {
+ public:
+  virtual void AddPacketProcessor(PacketProcessor* processor,
+                                  ProcessorType type);
+  virtual void RemovePacketProcessor(PacketProcessor* processor);
+
+  void Run(int64_t run_for_ms, int64_t now_ms, Packets* packets);
+
+  const std::vector<PacketSender*>& senders() { return senders_; }
+  const std::vector<PacketProcessorRunner>& processors() { return processors_; }
+
+ private:
+  std::vector<PacketSender*> senders_;
+  std::vector<PacketReceiver*> receivers_;
+  std::vector<PacketProcessorRunner> processors_;
+};
+
+class BweTest {
+ public:
+  BweTest();
+  ~BweTest();
+
+ protected:
+  void SetUp();
+
   void VerboseLogging(bool enable);
   void RunFor(int64_t time_ms);
   std::string GetTestName() const;
 
- private:
-  typedef std::map<int, TestedEstimator*> EstimatorMap;
+  Link downlink_;
+  Link uplink_;
 
+ private:
   void FindPacketsToProcess(const FlowIds& flow_ids, Packets* in,
                             Packets* out);
-  void GiveFeedbackToAffectedSenders(int flow_id, TestedEstimator* estimator);
+  void GiveFeedbackToAffectedSenders(PacketReceiver* receiver);
 
   int64_t run_time_ms_;
   int64_t time_now_ms_;
   int64_t simulation_interval_ms_;
-  EstimatorMap estimators_;
-  Packets previous_packets_;
-  std::vector<PacketSender*> senders_;
-  std::vector<PacketProcessorRunner> processors_;
+  std::vector<Link*> links_;
+  Packets packets_;
 
   DISALLOW_COPY_AND_ASSIGN(BweTest);
 };

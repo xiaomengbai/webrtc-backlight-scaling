@@ -48,6 +48,8 @@ class FilterFormat:
         self.failures.append(self.tests[job_id])
         for line in self.outputs[job_id]:
           print line
+        print ("[%d/%d] %s returned/aborted with exit code %d (%d ms)"
+            % (self.finished_tests, self.total_tests, test, exit_code, time_ms))
     elif command == "TESTCNT":
       self.total_tests = int(arg.split(' ', 1)[1])
       print "[0/%d] Running tests...\r" % self.total_tests,
@@ -80,8 +82,17 @@ class RawFormat:
   def end(self):
     pass
 
+# Remove additional arguments (anything after --).
+additional_args = []
+
+for i in range(len(sys.argv)):
+  if sys.argv[i] == '--':
+    additional_args = sys.argv[i+1:]
+    sys.argv = sys.argv[:i]
+    break
+
 parser = optparse.OptionParser(
-    usage = 'usage: %prog [options] executable [executable ...]')
+    usage = 'usage: %prog [options] binary [binary ...] -- [additional args]')
 
 parser.add_option('-r', '--repeat', type='int', default=1,
                   help='repeat tests')
@@ -121,6 +132,8 @@ for test_binary in binaries:
 
   test_list = subprocess.Popen(command + ['--gtest_list_tests'],
                                stdout=subprocess.PIPE).communicate()[0]
+
+  command += additional_args
 
   test_group = ''
   for line in test_list.split('\n'):

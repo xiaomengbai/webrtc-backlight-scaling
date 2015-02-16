@@ -108,12 +108,6 @@ bool UdpSocket2ManagerWindows::Init(int32_t id,
   return true;
 }
 
-int32_t UdpSocket2ManagerWindows::ChangeUniqueId(const int32_t id)
-{
-    _id = id;
-    return 0;
-}
-
 bool UdpSocket2ManagerWindows::Start()
 {
     WEBRTC_TRACE(kTraceDebug, kTraceTransport, _id,
@@ -274,12 +268,6 @@ bool UdpSocket2ManagerWindows::StopWorkerThreads()
         _managerNumber,
         _numActiveSockets);
 
-    // Set worker threads to not alive so that they will stop calling
-    // UdpSocket2WorkerWindows::Run().
-    for (WorkerList::iterator iter = _workerThreadsList.begin();
-         iter != _workerThreadsList.end(); ++iter) {
-        (*iter)->SetNotAlive();
-    }
     // Release all threads waiting for GetQueuedCompletionStatus(..).
     if(_ioCompletionHandle)
     {
@@ -563,13 +551,6 @@ bool UdpSocket2WorkerWindows::Stop()
     WEBRTC_TRACE(kTraceStateInfo,  kTraceTransport, -1,
                  "Stop UdpSocket2WorkerWindows");
     return _pThread->Stop();
-}
-
-void UdpSocket2WorkerWindows::SetNotAlive()
-{
-    WEBRTC_TRACE(kTraceStateInfo,  kTraceTransport, -1,
-                 "SetNotAlive UdpSocket2WorkerWindows");
-    _pThread->SetNotAlive();
 }
 
 int32_t UdpSocket2WorkerWindows::Init()

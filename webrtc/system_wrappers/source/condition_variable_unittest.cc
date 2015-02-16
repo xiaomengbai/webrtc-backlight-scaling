@@ -157,7 +157,6 @@ class CondVarTest : public ::testing::Test {
     // Thus, we need to pin it down inside its Run function (between Grab
     // and Pass).
     ASSERT_TRUE(baton_.Pass(kShortWaitMs));
-    thread_->SetNotAlive();
     ASSERT_TRUE(baton_.Grab(kShortWaitMs));
     ASSERT_TRUE(thread_->Stop());
     delete thread_;
@@ -172,12 +171,13 @@ class CondVarTest : public ::testing::Test {
 
 // The SetUp and TearDown functions use condition variables.
 // This test verifies those pieces in isolation.
-TEST_F(CondVarTest, InitFunctionsWork) {
+// Disabled due to flakiness.  See bug 4262 for details.
+TEST_F(CondVarTest, DISABLED_InitFunctionsWork) {
   // All relevant asserts are in the SetUp and TearDown functions.
 }
 
 // This test verifies that one can use the baton multiple times.
-TEST_F(CondVarTest, PassBatonMultipleTimes) {
+TEST_F(CondVarTest, DISABLED_PassBatonMultipleTimes) {
   const int kNumberOfRounds = 2;
   for (int i = 0; i < kNumberOfRounds; ++i) {
     ASSERT_TRUE(baton_.Pass(kShortWaitMs));

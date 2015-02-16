@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2013, Google Inc.
+ * Copyright 2013 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -56,13 +56,10 @@
 #undef JNIEXPORT
 #define JNIEXPORT __attribute__((visibility("default")))
 
-#include <asm/unistd.h>
-#include <sys/prctl.h>
-#include <sys/syscall.h>
-#include <unistd.h>
 #include <limits>
-#include <map>
 
+#include "talk/app/webrtc/java/jni/classreferenceholder.h"
+#include "talk/app/webrtc/java/jni/jni_helpers.h"
 #include "talk/app/webrtc/mediaconstraintsinterface.h"
 #include "talk/app/webrtc/peerconnectioninterface.h"
 #include "talk/app/webrtc/videosourceinterface.h"
@@ -81,16 +78,18 @@
 #include "webrtc/base/logging.h"
 #include "webrtc/base/messagequeue.h"
 #include "webrtc/base/ssladapter.h"
+#include "webrtc/base/stringutils.h"
 #include "webrtc/common_video/interface/texture_video_frame.h"
 #include "webrtc/modules/video_coding/codecs/interface/video_codec_interface.h"
-#include "webrtc/system_wrappers/interface/compile_assert.h"
+#include "webrtc/system_wrappers/interface/field_trial_default.h"
 #include "webrtc/system_wrappers/interface/trace.h"
 #include "webrtc/video_engine/include/vie_base.h"
 #include "webrtc/voice_engine/include/voe_base.h"
 
 #if defined(ANDROID) && !defined(WEBRTC_CHROMIUM_BUILD)
 #include <android/log.h>
-#include "webrtc/modules/video_capture/video_capture_internal.h"
+#include "talk/app/webrtc/androidvideocapturer.h"
+#include "talk/app/webrtc/java/jni/androidvideocapturer_jni.h"
 #include "webrtc/modules/video_render/video_render_internal.h"
 #include "webrtc/system_wrappers/interface/logcat_trace_context.h"
 #include "webrtc/system_wrappers/interface/tick_util.h"
@@ -105,7 +104,6 @@ using webrtc::TickTime;
 using webrtc::VideoCodec;
 #endif
 
-using icu::UnicodeString;
 using rtc::Bind;
 using rtc::Thread;
 using rtc::ThreadManager;
@@ -138,28 +136,10 @@ using webrtc::VideoTrackInterface;
 using webrtc::VideoTrackVector;
 using webrtc::kVideoCodecVP8;
 
-// Abort the process if |jni| has a Java exception pending.
-// This macros uses the comma operator to execute ExceptionDescribe
-// and ExceptionClear ignoring their return values and sending ""
-// to the error stream.
-#define CHECK_EXCEPTION(jni)    \
-  CHECK(!jni->ExceptionCheck()) \
-      << (jni->ExceptionDescribe(), jni->ExceptionClear(), "")
+namespace webrtc_jni {
 
-// Helper that calls ptr->Release() and aborts the process with a useful
-// message if that didn't actually delete *ptr because of extra refcounts.
-#define CHECK_RELEASE(ptr) \
-  CHECK_EQ(0, (ptr)->Release()) << "Unexpected refcount."
-
-namespace {
-
-static JavaVM* g_jvm = NULL;  // Set in JNI_OnLoad().
-
-static pthread_once_t g_jni_ptr_once = PTHREAD_ONCE_INIT;
-// Key for per-thread JNIEnv* data.  Non-NULL in threads attached to |g_jvm| by
-// AttachCurrentThreadIfNeeded(), NULL in unattached threads and threads that
-// were attached by the JVM because of a Java->native call.
-static pthread_key_t g_jni_ptr;
+// Field trials initialization string
+static char *field_trials_init_string = NULL;
 
 #if defined(ANDROID) && !defined(WEBRTC_CHROMIUM_BUILD)
 // Set in PeerConnectionFactory_initializeAndroidGlobals().
@@ -167,355 +147,29 @@ static bool factory_static_initialized = false;
 static bool vp8_hw_acceleration_enabled = true;
 #endif
 
+extern "C" jint JNIEXPORT JNICALL JNI_OnLoad(JavaVM *jvm, void *reserved) {
+  jint ret = InitGlobalJniVariables(jvm);
+  if (ret < 0)
+    return -1;
 
-// Return thread ID as a string.
-static std::string GetThreadId() {
-  char buf[21];  // Big enough to hold a kuint64max plus terminating NULL.
-  CHECK_LT(snprintf(buf, sizeof(buf), "%llu", syscall(__NR_gettid)),
-           sizeof(buf))
-      << "Thread id is bigger than uint64??";
-  return std::string(buf);
-}
+  CHECK(rtc::InitializeSSL()) << "Failed to InitializeSSL()";
+  LoadGlobalClassReferenceHolder();
 
-// Return the current thread's name.
-static std::string GetThreadName() {
-  char name[17];
-  CHECK_EQ(0, prctl(PR_GET_NAME, name)) << "prctl(PR_GET_NAME) failed";
-  name[16] = '\0';
-  return std::string(name);
-}
-
-// Return a |JNIEnv*| usable on this thread or NULL if this thread is detached.
-static JNIEnv* GetEnv() {
-  void* env = NULL;
-  jint status = g_jvm->GetEnv(&env, JNI_VERSION_1_6);
-  CHECK(((env != NULL) && (status == JNI_OK)) ||
-        ((env == NULL) && (status == JNI_EDETACHED)))
-      << "Unexpected GetEnv return: " << status << ":" << env;
-  return reinterpret_cast<JNIEnv*>(env);
-}
-
-static void ThreadDestructor(void* prev_jni_ptr) {
-  // This function only runs on threads where |g_jni_ptr| is non-NULL, meaning
-  // we were responsible for originally attaching the thread, so are responsible
-  // for detaching it now.  However, because some JVM implementations (notably
-  // Oracle's http://goo.gl/eHApYT) also use the pthread_key_create mechanism,
-  // the JVMs accounting info for this thread may already be wiped out by the
-  // time this is called. Thus it may appear we are already detached even though
-  // it was our responsibility to detach!  Oh well.
-  if (!GetEnv())
-    return;
-
-  CHECK(GetEnv() == prev_jni_ptr)
-      << "Detaching from another thread: " << prev_jni_ptr << ":" << GetEnv();
-  jint status = g_jvm->DetachCurrentThread();
-  CHECK(status == JNI_OK) << "Failed to detach thread: " << status;
-  CHECK(!GetEnv()) << "Detaching was a successful no-op???";
-}
-
-static void CreateJNIPtrKey() {
-  CHECK(!pthread_key_create(&g_jni_ptr, &ThreadDestructor))
-      << "pthread_key_create";
-}
-
-// Return a |JNIEnv*| usable on this thread.  Attaches to |g_jvm| if necessary.
-static JNIEnv* AttachCurrentThreadIfNeeded() {
-  JNIEnv* jni = GetEnv();
-  if (jni)
-    return jni;
-  CHECK(!pthread_getspecific(g_jni_ptr))
-      << "TLS has a JNIEnv* but not attached?";
-
-  char* name = strdup((GetThreadName() + " - " + GetThreadId()).c_str());
-  JavaVMAttachArgs args;
-  args.version = JNI_VERSION_1_6;
-  args.name = name;
-  args.group = NULL;
-  // Deal with difference in signatures between Oracle's jni.h and Android's.
-#ifdef _JAVASOFT_JNI_H_  // Oracle's jni.h violates the JNI spec!
-  void* env = NULL;
-#else
-  JNIEnv* env = NULL;
-#endif
-  CHECK(!g_jvm->AttachCurrentThread(&env, &args)) << "Failed to attach thread";
-  free(name);
-  CHECK(env) << "AttachCurrentThread handed back NULL!";
-  jni = reinterpret_cast<JNIEnv*>(env);
-  CHECK(!pthread_setspecific(g_jni_ptr, jni)) << "pthread_setspecific";
-  return jni;
-}
-
-// Return a |jlong| that will correctly convert back to |ptr|.  This is needed
-// because the alternative (of silently passing a 32-bit pointer to a vararg
-// function expecting a 64-bit param) picks up garbage in the high 32 bits.
-static jlong jlongFromPointer(void* ptr) {
-  COMPILE_ASSERT(sizeof(intptr_t) <= sizeof(jlong),
-                 Time_to_rethink_the_use_of_jlongs);
-  // Going through intptr_t to be obvious about the definedness of the
-  // conversion from pointer to integral type.  intptr_t to jlong is a standard
-  // widening by the COMPILE_ASSERT above.
-  jlong ret = reinterpret_cast<intptr_t>(ptr);
-  assert(reinterpret_cast<void*>(ret) == ptr);
   return ret;
 }
 
-// Android's FindClass() is trickier than usual because the app-specific
-// ClassLoader is not consulted when there is no app-specific frame on the
-// stack.  Consequently, we only look up classes once in JNI_OnLoad.
-// http://developer.android.com/training/articles/perf-jni.html#faq_FindClass
-class ClassReferenceHolder {
- public:
-  explicit ClassReferenceHolder(JNIEnv* jni) {
-    LoadClass(jni, "java/nio/ByteBuffer");
-    LoadClass(jni, "org/webrtc/AudioTrack");
-    LoadClass(jni, "org/webrtc/DataChannel");
-    LoadClass(jni, "org/webrtc/DataChannel$Buffer");
-    LoadClass(jni, "org/webrtc/DataChannel$Init");
-    LoadClass(jni, "org/webrtc/DataChannel$State");
-    LoadClass(jni, "org/webrtc/IceCandidate");
-#if defined(ANDROID) && !defined(WEBRTC_CHROMIUM_BUILD)
-    LoadClass(jni, "android/graphics/SurfaceTexture");
-    LoadClass(jni, "org/webrtc/MediaCodecVideoEncoder");
-    LoadClass(jni, "org/webrtc/MediaCodecVideoEncoder$OutputBufferInfo");
-    LoadClass(jni, "org/webrtc/MediaCodecVideoDecoder");
-    LoadClass(jni, "org/webrtc/MediaCodecVideoDecoder$DecoderOutputBufferInfo");
-    jclass j_decoder_class = GetClass("org/webrtc/MediaCodecVideoDecoder");
-    jmethodID j_is_egl14_supported_method = jni->GetStaticMethodID(
-        j_decoder_class, "isEGL14Supported", "()Z");
-    bool is_egl14_supported = jni->CallStaticBooleanMethod(
-        j_decoder_class, j_is_egl14_supported_method);
-    CHECK_EXCEPTION(jni);
-    if (is_egl14_supported) {
-      LoadClass(jni, "android/opengl/EGLContext");
-    }
-#endif
-    LoadClass(jni, "org/webrtc/MediaSource$State");
-    LoadClass(jni, "org/webrtc/MediaStream");
-    LoadClass(jni, "org/webrtc/MediaStreamTrack$State");
-    LoadClass(jni, "org/webrtc/PeerConnection$IceConnectionState");
-    LoadClass(jni, "org/webrtc/PeerConnection$IceGatheringState");
-    LoadClass(jni, "org/webrtc/PeerConnection$SignalingState");
-    LoadClass(jni, "org/webrtc/SessionDescription");
-    LoadClass(jni, "org/webrtc/SessionDescription$Type");
-    LoadClass(jni, "org/webrtc/StatsReport");
-    LoadClass(jni, "org/webrtc/StatsReport$Value");
-    LoadClass(jni, "org/webrtc/VideoRenderer$I420Frame");
-    LoadClass(jni, "org/webrtc/VideoTrack");
-  }
-
-  ~ClassReferenceHolder() {
-    CHECK(classes_.empty()) << "Must call FreeReferences() before dtor!";
-  }
-
-  void FreeReferences(JNIEnv* jni) {
-    for (std::map<std::string, jclass>::const_iterator it = classes_.begin();
-         it != classes_.end(); ++it) {
-      jni->DeleteGlobalRef(it->second);
-    }
-    classes_.clear();
-  }
-
-  jclass GetClass(const std::string& name) {
-    std::map<std::string, jclass>::iterator it = classes_.find(name);
-    CHECK(it != classes_.end()) << "Unexpected GetClass() call for: " << name;
-    return it->second;
-  }
-
- private:
-  void LoadClass(JNIEnv* jni, const std::string& name) {
-    jclass localRef = jni->FindClass(name.c_str());
-    CHECK_EXCEPTION(jni) << "error during FindClass: " << name;
-    CHECK(localRef) << name;
-    jclass globalRef = reinterpret_cast<jclass>(jni->NewGlobalRef(localRef));
-    CHECK_EXCEPTION(jni) << "error during NewGlobalRef: " << name;
-    CHECK(globalRef) << name;
-    bool inserted = classes_.insert(std::make_pair(name, globalRef)).second;
-    CHECK(inserted) << "Duplicate class name: " << name;
-  }
-
-  std::map<std::string, jclass> classes_;
-};
-
-// Allocated in JNI_OnLoad(), freed in JNI_OnUnLoad().
-static ClassReferenceHolder* g_class_reference_holder = NULL;
-
-// JNIEnv-helper methods that CHECK success: no Java exception thrown and found
-// object/class/method/field is non-null.
-jmethodID GetMethodID(
-    JNIEnv* jni, jclass c, const std::string& name, const char* signature) {
-  jmethodID m = jni->GetMethodID(c, name.c_str(), signature);
-  CHECK_EXCEPTION(jni) << "error during GetMethodID: " << name << ", "
-                       << signature;
-  CHECK(m) << name << ", " << signature;
-  return m;
-}
-
-jmethodID GetStaticMethodID(
-    JNIEnv* jni, jclass c, const char* name, const char* signature) {
-  jmethodID m = jni->GetStaticMethodID(c, name, signature);
-  CHECK_EXCEPTION(jni) << "error during GetStaticMethodID: " << name << ", "
-                       << signature;
-  CHECK(m) << name << ", " << signature;
-  return m;
-}
-
-jfieldID GetFieldID(
-    JNIEnv* jni, jclass c, const char* name, const char* signature) {
-  jfieldID f = jni->GetFieldID(c, name, signature);
-  CHECK_EXCEPTION(jni) << "error during GetFieldID";
-  CHECK(f) << name << ", " << signature;
-  return f;
-}
-
-// Returns a global reference guaranteed to be valid for the lifetime of the
-// process.
-jclass FindClass(JNIEnv* jni, const char* name) {
-  return g_class_reference_holder->GetClass(name);
-}
-
-jclass GetObjectClass(JNIEnv* jni, jobject object) {
-  jclass c = jni->GetObjectClass(object);
-  CHECK_EXCEPTION(jni) << "error during GetObjectClass";
-  CHECK(c) << "GetObjectClass returned NULL";
-  return c;
-}
-
-jobject GetObjectField(JNIEnv* jni, jobject object, jfieldID id) {
-  jobject o = jni->GetObjectField(object, id);
-  CHECK_EXCEPTION(jni) << "error during GetObjectField";
-  CHECK(o) << "GetObjectField returned NULL";
-  return o;
-}
-
-jstring GetStringField(JNIEnv* jni, jobject object, jfieldID id) {
-  return static_cast<jstring>(GetObjectField(jni, object, id));
-}
-
-jlong GetLongField(JNIEnv* jni, jobject object, jfieldID id) {
-  jlong l = jni->GetLongField(object, id);
-  CHECK_EXCEPTION(jni) << "error during GetLongField";
-  return l;
-}
-
-jint GetIntField(JNIEnv* jni, jobject object, jfieldID id) {
-  jint i = jni->GetIntField(object, id);
-  CHECK_EXCEPTION(jni) << "error during GetIntField";
-  return i;
-}
-
-bool GetBooleanField(JNIEnv* jni, jobject object, jfieldID id) {
-  jboolean b = jni->GetBooleanField(object, id);
-  CHECK_EXCEPTION(jni) << "error during GetBooleanField";
-  return b;
-}
-
-jobject NewGlobalRef(JNIEnv* jni, jobject o) {
-  jobject ret = jni->NewGlobalRef(o);
-  CHECK_EXCEPTION(jni) << "error during NewGlobalRef";
-  CHECK(ret);
-  return ret;
-}
-
-void DeleteGlobalRef(JNIEnv* jni, jobject o) {
-  jni->DeleteGlobalRef(o);
-  CHECK_EXCEPTION(jni) << "error during DeleteGlobalRef";
-}
-
-// Given a jweak reference, allocate a (strong) local reference scoped to the
-// lifetime of this object if the weak reference is still valid, or NULL
-// otherwise.
-class WeakRef {
- public:
-  WeakRef(JNIEnv* jni, jweak ref)
-      : jni_(jni), obj_(jni_->NewLocalRef(ref)) {
-    CHECK_EXCEPTION(jni) << "error during NewLocalRef";
-  }
-  ~WeakRef() {
-    if (obj_) {
-      jni_->DeleteLocalRef(obj_);
-      CHECK_EXCEPTION(jni_) << "error during DeleteLocalRef";
-    }
-  }
-  jobject obj() { return obj_; }
-
- private:
-  JNIEnv* const jni_;
-  jobject const obj_;
-};
-
-// Scope Java local references to the lifetime of this object.  Use in all C++
-// callbacks (i.e. entry points that don't originate in a Java callstack
-// through a "native" method call).
-class ScopedLocalRefFrame {
- public:
-  explicit ScopedLocalRefFrame(JNIEnv* jni) : jni_(jni) {
-    CHECK(!jni_->PushLocalFrame(0)) << "Failed to PushLocalFrame";
-  }
-  ~ScopedLocalRefFrame() {
-    jni_->PopLocalFrame(NULL);
-  }
-
- private:
-  JNIEnv* jni_;
-};
-
-// Scoped holder for global Java refs.
-template<class T>  // T is jclass, jobject, jintArray, etc.
-class ScopedGlobalRef {
- public:
-  ScopedGlobalRef(JNIEnv* jni, T obj)
-      : obj_(static_cast<T>(jni->NewGlobalRef(obj))) {}
-  ~ScopedGlobalRef() {
-    DeleteGlobalRef(AttachCurrentThreadIfNeeded(), obj_);
-  }
-  T operator*() const {
-    return obj_;
-  }
- private:
-  T obj_;
-};
-
-// Java references to "null" can only be distinguished as such in C++ by
-// creating a local reference, so this helper wraps that logic.
-static bool IsNull(JNIEnv* jni, jobject obj) {
-  ScopedLocalRefFrame local_ref_frame(jni);
-  return jni->NewLocalRef(obj) == NULL;
+extern "C" void JNIEXPORT JNICALL JNI_OnUnLoad(JavaVM *jvm, void *reserved) {
+  FreeGlobalClassReferenceHolder();
+  CHECK(rtc::CleanupSSL()) << "Failed to CleanupSSL()";
 }
 
 // Return the (singleton) Java Enum object corresponding to |index|;
 // |state_class_fragment| is something like "MediaSource$State".
 jobject JavaEnumFromIndex(
     JNIEnv* jni, const std::string& state_class_fragment, int index) {
-  std::string state_class_name = "org/webrtc/" + state_class_fragment;
-  jclass state_class = FindClass(jni, state_class_name.c_str());
-  jmethodID state_values_id = GetStaticMethodID(
-      jni, state_class, "values", ("()[L" + state_class_name  + ";").c_str());
-  jobjectArray state_values = static_cast<jobjectArray>(
-      jni->CallStaticObjectMethod(state_class, state_values_id));
-  CHECK_EXCEPTION(jni) << "error during CallStaticObjectMethod";
-  jobject ret = jni->GetObjectArrayElement(state_values, index);
-  CHECK_EXCEPTION(jni) << "error during GetObjectArrayElement";
-  return ret;
-}
-
-// Given a UTF-8 encoded |native| string return a new (UTF-16) jstring.
-static jstring JavaStringFromStdString(JNIEnv* jni, const std::string& native) {
-  UnicodeString ustr(UnicodeString::fromUTF8(native));
-  jstring jstr = jni->NewString(ustr.getBuffer(), ustr.length());
-  CHECK_EXCEPTION(jni) << "error during NewString";
-  return jstr;
-}
-
-// Given a (UTF-16) jstring return a new UTF-8 native string.
-static std::string JavaToStdString(JNIEnv* jni, const jstring& j_string) {
-  const jchar* jchars = jni->GetStringChars(j_string, NULL);
-  CHECK_EXCEPTION(jni) << "Error during GetStringChars";
-  UnicodeString ustr(jchars, jni->GetStringLength(j_string));
-  CHECK_EXCEPTION(jni) << "Error during GetStringLength";
-  jni->ReleaseStringChars(j_string, jchars);
-  CHECK_EXCEPTION(jni) << "Error during ReleaseStringChars";
-  std::string ret;
-  return ustr.toUTF8String(ret);
+  const std::string state_class = "org/webrtc/" + state_class_fragment;
+  return JavaEnumFromIndex(jni, FindClass(jni, state_class.c_str()),
+                           state_class, index);
 }
 
 static DataChannelInit JavaDataChannelInitToNative(
@@ -1003,14 +657,14 @@ class StatsObserverWrapper : public StatsObserver {
     int i = 0;
     for (const auto* report : reports) {
       ScopedLocalRefFrame local_ref_frame(jni);
-      jstring j_id = JavaStringFromStdString(jni, report->id);
-      jstring j_type = JavaStringFromStdString(jni, report->type);
-      jobjectArray j_values = ValuesToJava(jni, report->values);
+      jstring j_id = JavaStringFromStdString(jni, report->id().ToString());
+      jstring j_type = JavaStringFromStdString(jni, report->TypeToString());
+      jobjectArray j_values = ValuesToJava(jni, report->values());
       jobject j_report = jni->NewObject(*j_stats_report_class_,
                                         j_stats_report_ctor_,
                                         j_id,
                                         j_type,
-                                        report->timestamp,
+                                        report->timestamp(),
                                         j_values);
       jni->SetObjectArrayElement(reports_array, i++, j_report);
     }
@@ -1022,11 +676,11 @@ class StatsObserverWrapper : public StatsObserver {
         values.size(), *j_value_class_, NULL);
     for (int i = 0; i < values.size(); ++i) {
       ScopedLocalRefFrame local_ref_frame(jni);
-      const StatsReport::Value& value = values[i];
+      const auto& value = values[i];
       // Should we use the '.name' enum value here instead of converting the
       // name to a string?
-      jstring j_name = JavaStringFromStdString(jni, value.display_name());
-      jstring j_value = JavaStringFromStdString(jni, value.value);
+      jstring j_name = JavaStringFromStdString(jni, value->display_name());
+      jstring j_value = JavaStringFromStdString(jni, value->value);
       jobject j_element_value =
           jni->NewObject(*j_value_class_, j_value_ctor_, j_name, j_value);
       jni->SetObjectArrayElement(j_values, i, j_element_value);
@@ -1205,7 +859,7 @@ class JavaVideoRendererWrapper : public VideoRendererInterface {
 // into its own .h/.cc pair, if/when the JNI helper stuff above is extracted
 // from this file.
 
-//#define TRACK_BUFFER_TIMING
+// #define TRACK_BUFFER_TIMING
 #define TAG "MediaCodecVideo"
 #ifdef TRACK_BUFFER_TIMING
 #define ALOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, TAG, __VA_ARGS__)
@@ -1271,7 +925,7 @@ class MediaCodecVideoEncoder : public webrtc::VideoEncoder,
       webrtc::EncodedImageCallback* callback) OVERRIDE;
   virtual int32_t Release() OVERRIDE;
   virtual int32_t SetChannelParameters(uint32_t /* packet_loss */,
-                                       int /* rtt */) OVERRIDE;
+                                       int64_t /* rtt */) OVERRIDE;
   virtual int32_t SetRates(uint32_t new_bit_rate, uint32_t frame_rate) OVERRIDE;
 
   // rtc::MessageHandler implementation.
@@ -1340,7 +994,7 @@ class MediaCodecVideoEncoder : public webrtc::VideoEncoder,
   int height_;  // Frame height in pixels.
   bool inited_;
   uint16_t picture_id_;
-  enum libyuv::FourCC encoder_fourcc_; // Encoder color space format.
+  enum libyuv::FourCC encoder_fourcc_;  // Encoder color space format.
   int last_set_bitrate_kbps_;  // Last-requested bitrate in kbps.
   int last_set_fps_;  // Last-requested frame rate.
   int64_t current_timestamp_us_;  // Current frame timestamps in us.
@@ -1472,7 +1126,7 @@ int32_t MediaCodecVideoEncoder::Release() {
 }
 
 int32_t MediaCodecVideoEncoder::SetChannelParameters(uint32_t /* packet_loss */,
-                                                     int /* rtt */) {
+                                                     int64_t /* rtt */) {
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
@@ -1745,7 +1399,7 @@ int32_t MediaCodecVideoEncoder::ReleaseOnCodecThread() {
   CheckOnCodecThread();
   JNIEnv* jni = AttachCurrentThreadIfNeeded();
   ALOGD("EncoderRelease: Frames received: %d. Frames dropped: %d.",
-      frames_received_,frames_dropped_);
+      frames_received_, frames_dropped_);
   ScopedLocalRefFrame local_ref_frame(jni);
   for (size_t i = 0; i < input_buffers_.size(); ++i)
     jni->DeleteGlobalRef(input_buffers_[i]);
@@ -1869,7 +1523,7 @@ bool MediaCodecVideoEncoder::DeliverPendingOutputs(JNIEnv* jni) {
           current_encoding_time_ms_ / current_frames_, statistic_time_ms);
       start_time_ms_ = GetCurrentTimeMs();
       current_frames_ = 0;
-      current_bytes_= 0;
+      current_bytes_ = 0;
       current_encoding_time_ms_ = 0;
     }
 
@@ -2498,7 +2152,8 @@ bool MediaCodecVideoDecoder::DeliverPendingOutputs(
       decoded_image_.CreateFrame(
           stride * slice_height, payload,
           (stride * slice_height) / 4, payload + (stride * slice_height),
-          (stride * slice_height) / 4, payload + (5 * stride * slice_height / 4),
+          (stride * slice_height) / 4,
+          payload + (5 * stride * slice_height / 4),
           width, height,
           stride, stride / 2, stride / 2);
     } else {
@@ -2556,7 +2211,7 @@ bool MediaCodecVideoDecoder::DeliverPendingOutputs(
         current_decoding_time_ms_ / current_frames_, statistic_time_ms);
     start_time_ms_ = GetCurrentTimeMs();
     current_frames_ = 0;
-    current_bytes_= 0;
+    current_bytes_ = 0;
     current_decoding_time_ms_ = 0;
   }
 
@@ -2648,45 +2303,12 @@ webrtc::VideoDecoder* MediaCodecVideoDecoderFactory::CreateVideoDecoder(
   return new MediaCodecVideoDecoder(AttachCurrentThreadIfNeeded());
 }
 
-
 void MediaCodecVideoDecoderFactory::DestroyVideoDecoder(
     webrtc::VideoDecoder* decoder) {
   delete decoder;
 }
 
 #endif  // #if defined(ANDROID) && !defined(WEBRTC_CHROMIUM_BUILD)
-
-}  // anonymous namespace
-
-// Convenience macro defining JNI-accessible methods in the org.webrtc package.
-// Eliminates unnecessary boilerplate and line-wraps, reducing visual clutter.
-#define JOW(rettype, name) extern "C" rettype JNIEXPORT JNICALL \
-  Java_org_webrtc_##name
-
-extern "C" jint JNIEXPORT JNICALL JNI_OnLoad(JavaVM *jvm, void *reserved) {
-  CHECK(!g_jvm) << "JNI_OnLoad called more than once!";
-  g_jvm = jvm;
-  CHECK(g_jvm) << "JNI_OnLoad handed NULL?";
-
-  CHECK(!pthread_once(&g_jni_ptr_once, &CreateJNIPtrKey)) << "pthread_once";
-
-  CHECK(rtc::InitializeSSL()) << "Failed to InitializeSSL()";
-
-  JNIEnv* jni;
-  if (jvm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK)
-    return -1;
-  g_class_reference_holder = new ClassReferenceHolder(jni);
-
-  return JNI_VERSION_1_6;
-}
-
-extern "C" void JNIEXPORT JNICALL JNI_OnUnLoad(JavaVM *jvm, void *reserved) {
-  g_class_reference_holder->FreeReferences(AttachCurrentThreadIfNeeded());
-  delete g_class_reference_holder;
-  g_class_reference_holder = NULL;
-  CHECK(rtc::CleanupSSL()) << "Failed to CleanupSSL()";
-  g_jvm = NULL;
-}
 
 static DataChannelInterface* ExtractNativeDC(JNIEnv* jni, jobject j_dc) {
   jfieldID native_dc_id = GetFieldID(jni,
@@ -2837,24 +2459,39 @@ JOW(jboolean, PeerConnectionFactory_initializeAndroidGlobals)(
     JNIEnv* jni, jclass, jobject context,
     jboolean initialize_audio, jboolean initialize_video,
     jboolean vp8_hw_acceleration, jobject render_egl_context) {
-  CHECK(g_jvm) << "JNI_OnLoad failed to run?";
   bool failure = false;
   vp8_hw_acceleration_enabled = vp8_hw_acceleration;
   if (!factory_static_initialized) {
     if (initialize_video) {
-      failure |= webrtc::SetCaptureAndroidVM(g_jvm, context);
-      failure |= webrtc::SetRenderAndroidVM(g_jvm);
+      failure |= webrtc::SetRenderAndroidVM(GetJVM());
+      failure |= AndroidVideoCapturerJni::SetAndroidObjects(jni, context);
     }
     if (initialize_audio)
-      failure |= webrtc::VoiceEngine::SetAndroidObjects(g_jvm, jni, context);
+      failure |= webrtc::VoiceEngine::SetAndroidObjects(GetJVM(), jni, context);
     factory_static_initialized = true;
   }
-  if (initialize_video)
+  if (initialize_video) {
     failure |= MediaCodecVideoDecoder::SetAndroidObjects(jni,
         render_egl_context);
+  }
   return !failure;
 }
 #endif  // defined(ANDROID) && !defined(WEBRTC_CHROMIUM_BUILD)
+
+JOW(void, PeerConnectionFactory_initializeFieldTrials)(
+    JNIEnv* jni, jclass, jstring j_trials_init_string) {
+  field_trials_init_string = NULL;
+  if (j_trials_init_string != NULL) {
+    const char* init_string =
+        jni->GetStringUTFChars(j_trials_init_string, NULL);
+    int init_string_length = jni->GetStringUTFLength(j_trials_init_string);
+    field_trials_init_string = new char[init_string_length + 1];
+    rtc::strcpyn(field_trials_init_string, init_string_length + 1, init_string);
+    jni->ReleaseStringUTFChars(j_trials_init_string, init_string);
+    LOG(LS_INFO) << "initializeFieldTrials: " << field_trials_init_string;
+  }
+  webrtc::field_trial::InitFieldTrialsFromString(field_trials_init_string);
+}
 
 // Helper struct for working around the fact that CreatePeerConnectionFactory()
 // comes in two flavors: either entirely automagical (constructing its own
@@ -2917,6 +2554,11 @@ JOW(jlong, PeerConnectionFactory_nativeCreatePeerConnectionFactory)(
 
 JOW(void, PeerConnectionFactory_freeFactory)(JNIEnv*, jclass, jlong j_p) {
   delete reinterpret_cast<OwnedFactoryAndThreads*>(j_p);
+  if (field_trials_init_string) {
+    webrtc::field_trial::InitFieldTrialsFromString(NULL);
+    delete field_trials_init_string;
+    field_trials_init_string = NULL;
+  }
   webrtc::Trace::ReturnTrace();
 }
 
@@ -2979,6 +2621,23 @@ JOW(jlong, PeerConnectionFactory_nativeCreateAudioTrack)(
       JavaToStdString(jni, id),
       reinterpret_cast<AudioSourceInterface*>(native_source)));
   return (jlong)track.release();
+}
+
+JOW(void, PeerConnectionFactory_nativeSetOptions)(
+    JNIEnv* jni, jclass, jlong native_factory, jobject options) {
+  rtc::scoped_refptr<PeerConnectionFactoryInterface> factory(
+      factoryFromJava(native_factory));
+  jclass options_class = jni->GetObjectClass(options);
+  jfieldID network_ignore_mask_field =
+      jni->GetFieldID(options_class, "networkIgnoreMask", "I");
+  int network_ignore_mask =
+      jni->GetIntField(options, network_ignore_mask_field);
+  PeerConnectionFactoryInterface::Options options_to_set;
+
+  // This doesn't necessarily match the c++ version of this struct; feel free
+  // to add more parameters as necessary.
+  options_to_set.network_ignore_mask = network_ignore_mask;
+  factory->SetOptions(options_to_set);
 }
 
 static void JavaIceServersToJsepIceServers(
@@ -3195,10 +2854,10 @@ JOW(jobject, PeerConnection_iceConnectionState)(JNIEnv* jni, jobject j_pc) {
   return JavaEnumFromIndex(jni, "PeerConnection$IceConnectionState", state);
 }
 
-JOW(jobject, PeerGathering_iceGatheringState)(JNIEnv* jni, jobject j_pc) {
+JOW(jobject, PeerConnection_iceGatheringState)(JNIEnv* jni, jobject j_pc) {
   PeerConnectionInterface::IceGatheringState state =
       ExtractNativePC(jni, j_pc)->ice_gathering_state();
-  return JavaEnumFromIndex(jni, "PeerGathering$IceGatheringState", state);
+  return JavaEnumFromIndex(jni, "PeerConnection$IceGatheringState", state);
 }
 
 JOW(void, PeerConnection_close)(JNIEnv* jni, jobject j_pc) {
@@ -3212,8 +2871,32 @@ JOW(jobject, MediaSource_nativeState)(JNIEnv* jni, jclass, jlong j_p) {
   return JavaEnumFromIndex(jni, "MediaSource$State", p->state());
 }
 
-JOW(jlong, VideoCapturer_nativeCreateVideoCapturer)(
+JOW(jobject, VideoCapturer_nativeCreateVideoCapturer)(
     JNIEnv* jni, jclass, jstring j_device_name) {
+// Since we can't create platform specific java implementations in Java, we
+// defer the creation to C land.
+#if defined(ANDROID)
+  jclass j_video_capturer_class(
+      FindClass(jni, "org/webrtc/VideoCapturerAndroid"));
+  const jmethodID j_videocapturer_ctor(GetMethodID(
+      jni, j_video_capturer_class, "<init>", "()V"));
+  jobject j_video_capturer = jni->NewObject(j_video_capturer_class,
+                                            j_videocapturer_ctor);
+  CHECK_EXCEPTION(jni) << "error during NewObject";
+
+  const jmethodID m(GetMethodID(
+      jni, j_video_capturer_class, "Init", "(Ljava/lang/String;)Z"));
+  if (!jni->CallBooleanMethod(j_video_capturer, m, j_device_name)) {
+    return nullptr;
+  }
+  CHECK_EXCEPTION(jni) << "error during CallVoidMethod";
+
+  rtc::scoped_ptr<webrtc::AndroidVideoCapturerDelegate> delegate(
+      new AndroidVideoCapturerJni(jni, j_video_capturer));
+  rtc::scoped_ptr<webrtc::AndroidVideoCapturer> capturer(
+      new webrtc::AndroidVideoCapturer(delegate.Pass()));
+
+#else
   std::string device_name = JavaToStdString(jni, j_device_name);
   scoped_ptr<cricket::DeviceManagerInterface> device_manager(
       cricket::DeviceManagerFactory::Create());
@@ -3225,7 +2908,24 @@ JOW(jlong, VideoCapturer_nativeCreateVideoCapturer)(
   }
   scoped_ptr<cricket::VideoCapturer> capturer(
       device_manager->CreateVideoCapturer(device));
-  return (jlong)capturer.release();
+
+  jclass j_video_capturer_class(
+      FindClass(jni, "org/webrtc/VideoCapturer"));
+  const jmethodID j_videocapturer_ctor(GetMethodID(
+      jni, j_video_capturer_class, "<init>", "()V"));
+  jobject j_video_capturer =
+      jni->NewObject(j_video_capturer_class,
+                     j_videocapturer_ctor);
+  CHECK_EXCEPTION(jni) << "error during creation of VideoCapturer";
+
+#endif
+  const jmethodID j_videocapturer_set_native_capturer(GetMethodID(
+      jni, j_video_capturer_class, "setNativeCapturer", "(J)V"));
+  jni->CallVoidMethod(j_video_capturer,
+                      j_videocapturer_set_native_capturer,
+                      (jlong)capturer.release());
+  CHECK_EXCEPTION(jni) << "error during setNativeCapturer";
+  return j_video_capturer;
 }
 
 JOW(jlong, VideoRenderer_nativeCreateGuiVideoRenderer)(
@@ -3240,6 +2940,32 @@ JOW(jlong, VideoRenderer_nativeWrapVideoRenderer)(
   scoped_ptr<JavaVideoRendererWrapper> renderer(
       new JavaVideoRendererWrapper(jni, j_callbacks));
   return (jlong)renderer.release();
+}
+
+JOW(void, VideoRenderer_nativeCopyPlane)(
+    JNIEnv *jni, jclass, jobject j_src_buffer, jint width, jint height,
+    jint src_stride, jobject j_dst_buffer, jint dst_stride) {
+  size_t src_size = jni->GetDirectBufferCapacity(j_src_buffer);
+  size_t dst_size = jni->GetDirectBufferCapacity(j_dst_buffer);
+  CHECK(src_stride >= width) << "Wrong source stride " << src_stride;
+  CHECK(dst_stride >= width) << "Wrong destination stride " << dst_stride;
+  CHECK(src_size >= src_stride * height)
+      << "Insufficient source buffer capacity " << src_size;
+  CHECK(dst_size >= dst_stride * height)
+      << "Isufficient destination buffer capacity " << dst_size;
+  uint8_t *src =
+      reinterpret_cast<uint8_t*>(jni->GetDirectBufferAddress(j_src_buffer));
+  uint8_t *dst =
+      reinterpret_cast<uint8_t*>(jni->GetDirectBufferAddress(j_dst_buffer));
+  if (src_stride == dst_stride) {
+    memcpy(dst, src, src_stride * height);
+  } else {
+    for (int i = 0; i < height; i++) {
+      memcpy(dst, src, width);
+      src += src_stride;
+      dst += dst_stride;
+    }
+  }
 }
 
 JOW(jlong, VideoSource_stop)(JNIEnv* jni, jclass, jlong j_p) {
@@ -3314,3 +3040,5 @@ JOW(void, VideoTrack_nativeRemoveRenderer)(
   reinterpret_cast<VideoTrackInterface*>(j_video_track_pointer)->RemoveRenderer(
       reinterpret_cast<VideoRendererInterface*>(j_renderer_pointer));
 }
+
+}  // namespace webrtc_jni

@@ -10,7 +10,7 @@ import("//build/config/crypto.gni")
 import("//build/config/ui.gni")
 import("../build/webrtc.gni")
 
-config("webrtc_base_config") {
+config("rtc_base_config") {
   include_dirs = [
     "//third_party/jsoncpp/overrides/include",
     "//third_party/jsoncpp/source/include",
@@ -19,15 +19,14 @@ config("webrtc_base_config") {
   defines = [
     "FEATURE_ENABLE_SSL",
     "LOGGING=1",
-    "USE_WEBRTC_DEV_BRANCH",
   ]
 
-  # TODO(henrike): issue 3307, make webrtc_base build without disabling
+  # TODO(henrike): issue 3307, make rtc_base build without disabling
   # these flags.
   cflags_cc = [ "-Wno-non-virtual-dtor" ]
 }
 
-config("webrtc_base_chromium_config") {
+config("rtc_base_chromium_config") {
   defines = [
     "NO_MAIN_THREAD_WRAPPING",
   ]
@@ -106,6 +105,8 @@ static_library("rtc_base_approved") {
   sources = [
     "checks.cc",
     "checks.h",
+    "event.cc",
+    "event.h",
     "exp_filter.cc",
     "exp_filter.h",
     "md5.cc",
@@ -119,13 +120,17 @@ static_library("rtc_base_approved") {
     "stringencode.h",
     "stringutils.cc",
     "stringutils.h",
+    "template_util.h",
     "thread_annotations.h",
+    "thread_checker.h",
+    "thread_checker_impl.cc",
+    "thread_checker_impl.h",
     "timeutils.cc",
     "timeutils.h",
   ]
 }
 
-static_library("webrtc_base") {
+static_library("rtc_base") {
   cflags = []
   cflags_cc = []
   libs = []
@@ -135,20 +140,20 @@ static_library("webrtc_base") {
 
   configs += [
     "..:common_config",
-    ":webrtc_base_config",
+    ":rtc_base_config",
   ]
 
   public_configs = [
     "..:common_inherited_config",
-    ":webrtc_base_config",
+    ":rtc_base_config",
   ]
 
   defines = [
     "LOGGING=1",
-    "USE_WEBRTC_DEV_BRANCH",
   ]
 
   sources = [
+    "arraysize.h",
     "asyncfile.cc",
     "asyncfile.h",
     "asynchttprequest.cc",
@@ -178,8 +183,6 @@ static_library("webrtc_base") {
     "cryptstring.h",
     "diskcache.cc",
     "diskcache.h",
-    "event.cc",
-    "event.h",
     "fileutils.cc",
     "fileutils.h",
     "firewallsocketserver.cc",
@@ -274,9 +277,6 @@ static_library("webrtc_base") {
     "taskrunner.h",
     "thread.cc",
     "thread.h",
-    "thread_checker.h",
-    "thread_checker_impl.cc",
-    "thread_checker_impl.h",
     "timing.cc",
     "timing.h",
     "urlencode.cc",
@@ -309,7 +309,7 @@ static_library("webrtc_base") {
       "../../boringssl/src/include",
     ]
 
-    public_configs += [ ":webrtc_base_chromium_config" ]
+    public_configs += [ ":rtc_base_chromium_config" ]
   } else {
     sources += [
       "asyncinvoker.cc",
@@ -440,7 +440,7 @@ static_library("webrtc_base") {
     configs -= [ "//build/config/clang:find_bad_constructs" ]
   }
 
-  # TODO(henrike): issue 3307, make webrtc_base build with the Chromium default
+  # TODO(henrike): issue 3307, make rtc_base build with the Chromium default
   # compiler settings.
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]

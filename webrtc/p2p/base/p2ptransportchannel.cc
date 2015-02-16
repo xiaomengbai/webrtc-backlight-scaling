@@ -501,14 +501,18 @@ void P2PTransportChannel::OnUnknownAddress(
       }
     }
 
-    std::string id = rtc::CreateRandomString(8);
     new_remote_candidate =
-        Candidate(id, component(), ProtoToString(proto), address, 0,
-                  remote_username, remote_password, type, 0U,
-                  rtc::ToString<uint32>(rtc::ComputeCrc32(id)));
-    new_remote_candidate.set_priority(
-        new_remote_candidate.GetPriority(ICE_TYPE_PREFERENCE_SRFLX,
-                                         port->Network()->preference(), 0));
+        Candidate(component(), ProtoToString(proto), address, 0,
+                  remote_username, remote_password, type, 0U, "");
+
+    // From RFC 5245, section-7.2.1.3:
+    // The foundation of the candidate is set to an arbitrary value, different
+    // from the foundation for all other remote candidates.
+    new_remote_candidate.set_foundation(
+        rtc::ToString<uint32>(rtc::ComputeCrc32(new_remote_candidate.id())));
+
+    new_remote_candidate.set_priority(new_remote_candidate.GetPriority(
+        ICE_TYPE_PREFERENCE_PRFLX, port->Network()->preference(), 0));
   }
 
   if (port->IceProtocol() == ICEPROTO_RFC5245) {
@@ -813,6 +817,7 @@ void P2PTransportChannel::RememberRemoteCandidate(
 // Set options on ourselves is simply setting options on all of our available
 // port objects.
 int P2PTransportChannel::SetOption(rtc::Socket::Option opt, int value) {
+  ASSERT(worker_thread_ == rtc::Thread::Current());
   OptionMap::iterator it = options_.find(opt);
   if (it == options_.end()) {
     options_.insert(std::make_pair(opt, value));
@@ -832,6 +837,17 @@ int P2PTransportChannel::SetOption(rtc::Socket::Option opt, int value) {
     }
   }
   return 0;
+}
+
+bool P2PTransportChannel::GetOption(rtc::Socket::Option opt, int* value) {
+  ASSERT(worker_thread_ == rtc::Thread::Current());
+
+  const auto& found = options_.find(opt);
+  if (found == options_.end()) {
+    return false;
+  }
+  *value = found->second;
+  return true;
 }
 
 // Send data to the other side, using our best connection.

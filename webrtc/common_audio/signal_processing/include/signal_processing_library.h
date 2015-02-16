@@ -383,15 +383,6 @@ int WebRtcSpl_ScaleAndAddVectorsWithRoundC(const int16_t* in_vector1,
                                            int right_shifts,
                                            int16_t* out_vector,
                                            int length);
-#if (defined WEBRTC_DETECT_ARM_NEON) || (defined WEBRTC_ARCH_ARM_NEON)
-int WebRtcSpl_ScaleAndAddVectorsWithRoundNeon(const int16_t* in_vector1,
-                                              int16_t in_vector1_scale,
-                                              const int16_t* in_vector2,
-                                              int16_t in_vector2_scale,
-                                              int right_shifts,
-                                              int16_t* out_vector,
-                                              int length);
-#endif
 #if defined(MIPS_DSP_R1_LE)
 int WebRtcSpl_ScaleAndAddVectorsWithRound_mips(const int16_t* in_vector1,
                                                int16_t in_vector1_scale,
@@ -465,17 +456,15 @@ int WebRtcSpl_AutoCorrelation(const int16_t* in_vector,
 // does NOT use the 64 bit class
 //
 // Input:
-//      - auto_corr : Vector with autocorrelation values of length >=
-//                    |use_order|+1
-//      - use_order : The LPC filter order (support up to order 20)
+//      - auto_corr : Vector with autocorrelation values of length >= |order|+1
+//      - order     : The LPC filter order (support up to order 20)
 //
 // Output:
-//      - lpc_coef  : lpc_coef[0..use_order] LPC coefficients in Q12
-//      - refl_coef : refl_coef[0...use_order-1]| Reflection coefficients in
-//                    Q15
+//      - lpc_coef  : lpc_coef[0..order] LPC coefficients in Q12
+//      - refl_coef : refl_coef[0...order-1]| Reflection coefficients in Q15
 //
 // Return value     : 1 for stable 0 for unstable
-int16_t WebRtcSpl_LevinsonDurbin(int32_t* auto_corr,
+int16_t WebRtcSpl_LevinsonDurbin(const int32_t* auto_corr,
                                  int16_t* lpc_coef,
                                  int16_t* refl_coef,
                                  int16_t order);
@@ -659,9 +648,23 @@ int WebRtcSpl_FilterAR(const int16_t* ar_coef,
                        int16_t* out_vector_low,
                        int out_vector_low_length);
 
-void WebRtcSpl_FilterMAFastQ12(int16_t* in_vector,
+// WebRtcSpl_FilterMAFastQ12(...)
+//
+// Performs a MA filtering on a vector in Q12
+//
+// Input:
+//      - in_vector         : Input samples (state in positions
+//                            in_vector[-order] .. in_vector[-1])
+//      - ma_coef           : Filter coefficients (in Q12)
+//      - ma_coef_length    : Number of B coefficients (order+1)
+//      - vector_length     : Number of samples to be filtered
+//
+// Output:
+//      - out_vector        : Filtered samples
+//
+void WebRtcSpl_FilterMAFastQ12(const int16_t* in_vector,
                                int16_t* out_vector,
-                               int16_t* ma_coef,
+                               const int16_t* ma_coef,
                                int16_t ma_coef_length,
                                int16_t vector_length);
 
@@ -1506,22 +1509,6 @@ void WebRtcSpl_SynthesisQMF(const int16_t* low_band,
 //                                filtered values.
 //
 // Return value                 : Number of samples in the |out_vector|.
-//
-
-//
-// WebRtcSpl_FilterMAFastQ12(...)
-//
-// Performs a MA filtering on a vector in Q12
-//
-// Input:
-//      - in_vector         : Input samples (state in positions
-//                            in_vector[-order] .. in_vector[-1])
-//      - ma_coef           : Filter coefficients (in Q12)
-//      - ma_coef_length    : Number of B coefficients (order+1)
-//      - vector_length     : Number of samples to be filtered
-//
-// Output:
-//      - out_vector        : Filtered samples
 //
 
 //

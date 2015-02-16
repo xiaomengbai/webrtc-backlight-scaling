@@ -9,3 +9,8 @@ Whitespaces are cool.
 
 
 Really cool.
+
+Testing Git updater.
+Testing updated refs to pending
+Final whitespace after gnumbd switch completed.
+

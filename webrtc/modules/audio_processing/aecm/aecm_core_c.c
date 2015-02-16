@@ -14,10 +14,10 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#include "webrtc/common_audio/ring_buffer.h"
 #include "webrtc/common_audio/signal_processing/include/real_fft.h"
 #include "webrtc/modules/audio_processing/aecm/include/echo_control_mobile.h"
 #include "webrtc/modules/audio_processing/utility/delay_estimator_wrapper.h"
-#include "webrtc/modules/audio_processing/utility/ring_buffer.h"
 #include "webrtc/system_wrappers/interface/compile_assert_c.h"
 #include "webrtc/system_wrappers/interface/cpu_features_wrapper.h"
 #include "webrtc/typedefs.h"
@@ -266,8 +266,8 @@ static int TimeToFrequencyDomain(AecmCore* aecm,
 #else
       tmp16no1 = WEBRTC_SPL_ABS_W16(freq_signal[i].real);
       tmp16no2 = WEBRTC_SPL_ABS_W16(freq_signal[i].imag);
-      tmp32no1 = WEBRTC_SPL_MUL_16_16(tmp16no1, tmp16no1);
-      tmp32no2 = WEBRTC_SPL_MUL_16_16(tmp16no2, tmp16no2);
+      tmp32no1 = tmp16no1 * tmp16no1;
+      tmp32no2 = tmp16no2 * tmp16no2;
       tmp32no2 = WebRtcSpl_AddSatW32(tmp32no1, tmp32no2);
 #endif // WEBRTC_ARCH_ARM_V7
       tmp32no1 = WebRtcSpl_SqrtFloor(tmp32no2);

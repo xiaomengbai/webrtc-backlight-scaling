@@ -10,6 +10,8 @@
 
 #include "webrtc/video_engine/vie_channel_manager.h"
 
+#include <vector>
+
 #include "webrtc/common.h"
 #include "webrtc/engine_configurations.h"
 #include "webrtc/modules/rtp_rtcp/interface/rtp_rtcp.h"
@@ -36,7 +38,6 @@ ViEChannelManager::ViEChannelManager(
       free_channel_ids_(new bool[kViEMaxNumberOfChannels]),
       free_channel_ids_size_(kViEMaxNumberOfChannels),
       voice_sync_interface_(NULL),
-      voice_engine_(NULL),
       module_process_thread_(NULL),
       engine_config_(config) {
   for (int idx = 0; idx < free_channel_ids_size_; idx++) {
@@ -85,14 +86,15 @@ int ViEChannelManager::CreateChannel(int* channel_id,
   }
 
   // Create a new channel group and add this channel.
-  ChannelGroup* group = new ChannelGroup(engine_id_, module_process_thread_,
+  ChannelGroup* group = new ChannelGroup(module_process_thread_,
                                          channel_group_config);
   BitrateController* bitrate_controller = group->GetBitrateController();
   ViEEncoder* vie_encoder = new ViEEncoder(engine_id_, new_channel_id,
                                            number_of_cores_,
                                            engine_config_,
                                            *module_process_thread_,
-                                           bitrate_controller);
+                                           bitrate_controller,
+                                           false);
 
   RtcpBandwidthObserver* bandwidth_observer =
       bitrate_controller->CreateRtcpBandwidthObserver();
@@ -107,13 +109,16 @@ int ViEChannelManager::CreateChannel(int* channel_id,
         CreateChannelObject(new_channel_id, vie_encoder, bandwidth_observer,
                             remote_bitrate_estimator, rtcp_rtt_stats,
                             encoder_state_feedback->GetRtcpIntraFrameObserver(),
-                            true))) {
+                            true, false))) {
     delete vie_encoder;
     vie_encoder = NULL;
     ReturnChannelId(new_channel_id);
     delete group;
     return -1;
   }
+  // Connect the encoder with the send packet router, to enable sending.
+  vie_encoder->SetSendPayloadRouter(
+      channel_map_[new_channel_id]->send_payload_router());
 
   // Add ViEEncoder to EncoderFeedBackObserver.
   unsigned int ssrc = 0;
@@ -134,7 +139,8 @@ int ViEChannelManager::CreateChannel(int* channel_id,
 
 int ViEChannelManager::CreateChannel(int* channel_id,
                                      int original_channel,
-                                     bool sender) {
+                                     bool sender,
+                                     bool disable_default_encoder) {
   CriticalSectionScoped cs(channel_id_critsect_);
 
   ChannelGroup* channel_group = FindGroup(original_channel);
@@ -161,7 +167,8 @@ int ViEChannelManager::CreateChannel(int* channel_id,
     vie_encoder = new ViEEncoder(engine_id_, new_channel_id, number_of_cores_,
                                  engine_config_,
                                  *module_process_thread_,
-                                 bitrate_controller);
+                                 bitrate_controller,
+                                 disable_default_encoder);
     if (!(vie_encoder->Init() &&
         CreateChannelObject(
             new_channel_id,
@@ -170,10 +177,15 @@ int ViEChannelManager::CreateChannel(int* channel_id,
             remote_bitrate_estimator,
             rtcp_rtt_stats,
             encoder_state_feedback->GetRtcpIntraFrameObserver(),
-            sender))) {
+            sender,
+            disable_default_encoder))) {
       delete vie_encoder;
       vie_encoder = NULL;
     }
+    // Connect the encoder with the send packet router, to enable sending.
+    vie_encoder->SetSendPayloadRouter(
+        channel_map_[new_channel_id]->send_payload_router());
+
     // Register the ViEEncoder to get key frame requests for this channel.
     unsigned int ssrc = 0;
     int stream_idx = 0;
@@ -189,7 +201,8 @@ int ViEChannelManager::CreateChannel(int* channel_id,
         remote_bitrate_estimator,
         rtcp_rtt_stats,
         encoder_state_feedback->GetRtcpIntraFrameObserver(),
-        sender)) {
+        sender,
+        disable_default_encoder)) {
       vie_encoder = NULL;
     }
   }
@@ -304,7 +317,6 @@ int ViEChannelManager::SetVoiceEngine(VoiceEngine* voice_engine) {
   if (voice_sync_interface_) {
     voice_sync_interface_->Release();
   }
-  voice_engine_ = voice_engine;
   voice_sync_interface_ = sync_interface;
   return 0;
 }
@@ -331,11 +343,6 @@ int ViEChannelManager::DisconnectVoiceChannel(int channel_id) {
     return 0;
   }
   return -1;
-}
-
-VoiceEngine* ViEChannelManager::GetVoiceEngine() {
-  CriticalSectionScoped cs(channel_id_critsect_);
-  return voice_engine_;
 }
 
 bool ViEChannelManager::SetRembStatus(int channel_id, bool sender,
@@ -386,17 +393,6 @@ void ViEChannelManager::UpdateSsrcs(int channel_id,
   }
 }
 
-bool ViEChannelManager::SetBandwidthEstimationConfig(
-    int channel_id, const webrtc::Config& config) {
-  CriticalSectionScoped cs(channel_id_critsect_);
-  ChannelGroup* group = FindGroup(channel_id);
-  if (!group) {
-    return false;
-  }
-  group->SetBandwidthEstimationConfig(config);
-  return true;
-}
-
 bool ViEChannelManager::GetEstimatedSendBandwidth(
     int channel_id, uint32_t* estimated_bandwidth) const {
   CriticalSectionScoped cs(channel_id_critsect_);
@@ -430,7 +426,8 @@ bool ViEChannelManager::CreateChannelObject(
     RemoteBitrateEstimator* remote_bitrate_estimator,
     RtcpRttStats* rtcp_rtt_stats,
     RtcpIntraFrameObserver* intra_frame_observer,
-    bool sender) {
+    bool sender,
+    bool disable_default_encoder) {
   PacedSender* paced_sender = vie_encoder->GetPacedSender();
 
   // Register the channel at the encoder.
@@ -446,19 +443,22 @@ bool ViEChannelManager::CreateChannelObject(
                                            rtcp_rtt_stats,
                                            paced_sender,
                                            send_rtp_rtcp_module,
-                                           sender);
+                                           sender,
+                                           disable_default_encoder);
   if (vie_channel->Init() != 0) {
     delete vie_channel;
     return false;
   }
-  VideoCodec encoder;
-  if (vie_encoder->GetEncoder(&encoder) != 0) {
-    delete vie_channel;
-    return false;
-  }
-  if (sender && vie_channel->SetSendCodec(encoder) != 0) {
-    delete vie_channel;
-    return false;
+  if (!disable_default_encoder) {
+    VideoCodec encoder;
+    if (vie_encoder->GetEncoder(&encoder) != 0) {
+      delete vie_channel;
+      return false;
+    }
+    if (sender && vie_channel->SetSendCodec(encoder) != 0) {
+      delete vie_channel;
+      return false;
+    }
   }
   // Store the channel, add it to the channel group and save the vie_encoder.
   channel_map_[channel_id] = vie_channel;

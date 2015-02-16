@@ -12,6 +12,7 @@
 
 #include <limits>
 
+#include "webrtc/base/checks.h"
 #include "webrtc/modules/audio_coding/codecs/g711/include/g711_interface.h"
 
 namespace webrtc {
@@ -59,14 +60,14 @@ int AudioEncoderPcm::Max10MsFramesInAPacket() const {
   return num_10ms_frames_per_packet_;
 }
 
-bool AudioEncoderPcm::EncodeInternal(uint32_t timestamp,
+bool AudioEncoderPcm::EncodeInternal(uint32_t rtp_timestamp,
                                      const int16_t* audio,
                                      size_t max_encoded_bytes,
                                      uint8_t* encoded,
                                      EncodedInfo* info) {
   const int num_samples = sample_rate_hz() / 100 * num_channels();
   if (speech_buffer_.empty()) {
-    first_timestamp_in_buffer_ = timestamp;
+    first_timestamp_in_buffer_ = rtp_timestamp;
   }
   for (int i = 0; i < num_samples; ++i) {
     speech_buffer_.push_back(audio[i]);
@@ -89,17 +90,13 @@ bool AudioEncoderPcm::EncodeInternal(uint32_t timestamp,
 int16_t AudioEncoderPcmA::EncodeCall(const int16_t* audio,
                                      size_t input_len,
                                      uint8_t* encoded) {
-  return WebRtcG711_EncodeA(const_cast<int16_t*>(audio),
-                            static_cast<int16_t>(input_len),
-                            reinterpret_cast<int16_t*>(encoded));
+  return WebRtcG711_EncodeA(audio, static_cast<int16_t>(input_len), encoded);
 }
 
 int16_t AudioEncoderPcmU::EncodeCall(const int16_t* audio,
                                      size_t input_len,
                                      uint8_t* encoded) {
-  return WebRtcG711_EncodeU(const_cast<int16_t*>(audio),
-                            static_cast<int16_t>(input_len),
-                            reinterpret_cast<int16_t*>(encoded));
+  return WebRtcG711_EncodeU(audio, static_cast<int16_t>(input_len), encoded);
 }
 
 }  // namespace webrtc

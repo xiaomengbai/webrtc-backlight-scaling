@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2014, Google Inc.
+ * Copyright 2014 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -31,11 +31,13 @@
 
 #include "talk/app/webrtc/mediastream.h"
 #include "talk/app/webrtc/mediastreaminterface.h"
+#include "talk/app/webrtc/mediastreamsignaling.h"
 #include "talk/app/webrtc/mediastreamtrack.h"
+#include "talk/app/webrtc/test/fakedatachannelprovider.h"
+#include "talk/app/webrtc/test/fakemediastreamsignaling.h"
 #include "talk/app/webrtc/videotrack.h"
 #include "talk/media/base/fakemediaengine.h"
 #include "talk/media/devices/fakedevicemanager.h"
-#include "webrtc/p2p/base/fakesession.h"
 #include "talk/session/media/channelmanager.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -43,8 +45,10 @@
 #include "webrtc/base/fakesslidentity.h"
 #include "webrtc/base/gunit.h"
 #include "webrtc/base/network.h"
+#include "webrtc/p2p/base/fakesession.h"
 
 using cricket::StatsOptions;
+using rtc::scoped_ptr;
 using testing::_;
 using testing::DoAll;
 using testing::Field;
@@ -66,7 +70,6 @@ namespace webrtc {
 
 // Error return values
 const char kNotFound[] = "NOT FOUND";
-const char kNoReports[] = "NO REPORTS";
 
 // Constant names for track identification.
 const char kLocalTrackId[] = "local_track_id";
@@ -81,6 +84,7 @@ class MockWebRtcSession : public webrtc::WebRtcSession {
   }
   MOCK_METHOD0(voice_channel, cricket::VoiceChannel*());
   MOCK_METHOD0(video_channel, cricket::VideoChannel*());
+  MOCK_CONST_METHOD0(mediastream_signaling, const MediaStreamSignaling*());
   // Libjingle uses "local" for a outgoing track, and "remote" for a incoming
   // track.
   MOCK_METHOD2(GetLocalTrackIdBySsrc, bool(uint32, std::string*));
@@ -148,65 +152,82 @@ class FakeAudioTrack
   rtc::scoped_refptr<FakeAudioProcessor> processor_;
 };
 
+// TODO(tommi): Use FindValue().
 bool GetValue(const StatsReport* report,
               StatsReport::StatsValueName name,
               std::string* value) {
-  StatsReport::Values::const_iterator it = report->values.begin();
-  for (; it != report->values.end(); ++it) {
-    if (it->name == name) {
-      *value = it->value;
+  for (const auto& v : report->values()) {
+    if (v->name == name) {
+      *value = v->value;
       return true;
     }
   }
   return false;
 }
 
-std::string ExtractStatsValue(const std::string& type,
+std::string ExtractStatsValue(const StatsReport::StatsType& type,
                               const StatsReports& reports,
                               StatsReport::StatsValueName name) {
-  if (reports.empty()) {
-    return kNoReports;
-  }
-  for (size_t i = 0; i < reports.size(); ++i) {
-    if (reports[i]->type != type)
-      continue;
+  for (const auto* r : reports) {
     std::string ret;
-    if (GetValue(reports[i], name, &ret)) {
+    if (r->type() == type && GetValue(r, name, &ret))
       return ret;
-    }
   }
 
   return kNotFound;
 }
 
+scoped_ptr<StatsReport::Id> TypedIdFromIdString(StatsReport::StatsType type,
+                                                const std::string& value) {
+  EXPECT_FALSE(value.empty());
+  scoped_ptr<StatsReport::Id> id;
+  if (value.empty())
+    return id.Pass();
+
+  // This has assumptions about how the ID is constructed.  As is, this is
+  // OK since this is for testing purposes only, but if we ever need this
+  // in production, we should add a generic method that does this.
+  size_t index = value.find('_');
+  EXPECT_NE(index, std::string::npos);
+  if (index == std::string::npos || index == (value.length() - 1))
+    return id.Pass();
+
+  id = StatsReport::NewTypedId(type, value.substr(index + 1));
+  EXPECT_EQ(id->ToString(), value);
+  return id.Pass();
+}
+
+scoped_ptr<StatsReport::Id> IdFromCertIdString(const std::string& cert_id) {
+  return TypedIdFromIdString(StatsReport::kStatsReportTypeCertificate, cert_id)
+      .Pass();
+}
+
 // Finds the |n|-th report of type |type| in |reports|.
 // |n| starts from 1 for finding the first report.
 const StatsReport* FindNthReportByType(
-    const StatsReports& reports, const std::string& type, int n) {
+    const StatsReports& reports, const StatsReport::StatsType& type, int n) {
   for (size_t i = 0; i < reports.size(); ++i) {
-    if (reports[i]->type == type) {
+    if (reports[i]->type() == type) {
       n--;
       if (n == 0)
         return reports[i];
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 const StatsReport* FindReportById(const StatsReports& reports,
-                                  const std::string& id) {
-  for (size_t i = 0; i < reports.size(); ++i) {
-    if (reports[i]->id == id) {
-      return reports[i];
-    }
+                                  const StatsReport::Id& id) {
+  for (const auto* r : reports) {
+    if (r->id().Equals(id))
+      return r;
   }
-  return NULL;
+  return nullptr;
 }
 
 std::string ExtractSsrcStatsValue(StatsReports reports,
                                   StatsReport::StatsValueName name) {
-  return ExtractStatsValue(
-      StatsReport::kStatsReportTypeSsrc, reports, name);
+  return ExtractStatsValue(StatsReport::kStatsReportTypeSsrc, reports, name);
 }
 
 std::string ExtractBweStatsValue(StatsReports reports,
@@ -231,18 +252,18 @@ std::vector<std::string> DersToPems(
 
 void CheckCertChainReports(const StatsReports& reports,
                            const std::vector<std::string>& ders,
-                           const std::string& start_id) {
-  std::string certificate_id = start_id;
+                           const StatsReport::Id& start_id) {
+  scoped_ptr<StatsReport::Id> cert_id;
+  const StatsReport::Id* certificate_id = &start_id;
   size_t i = 0;
   while (true) {
-    const StatsReport* report = FindReportById(reports, certificate_id);
+    const StatsReport* report = FindReportById(reports, *certificate_id);
     ASSERT_TRUE(report != NULL);
 
     std::string der_base64;
     EXPECT_TRUE(GetValue(
         report, StatsReport::kStatsValueNameDer, &der_base64));
-    std::string der = rtc::Base64::Decode(der_base64,
-                                                rtc::Base64::DO_STRICT);
+    std::string der = rtc::Base64::Decode(der_base64, rtc::Base64::DO_STRICT);
     EXPECT_EQ(ders[i], der);
 
     std::string fingerprint_algorithm;
@@ -254,16 +275,20 @@ void CheckCertChainReports(const StatsReports& reports,
     std::string sha_1_str = rtc::DIGEST_SHA_1;
     EXPECT_EQ(sha_1_str, fingerprint_algorithm);
 
-    std::string dummy_fingerprint;  // Value is not checked.
-    EXPECT_TRUE(GetValue(
-        report,
-        StatsReport::kStatsValueNameFingerprint,
-        &dummy_fingerprint));
+    std::string fingerprint;
+    EXPECT_TRUE(GetValue(report, StatsReport::kStatsValueNameFingerprint,
+                         &fingerprint));
+    EXPECT_FALSE(fingerprint.empty());
 
     ++i;
-    if (!GetValue(
-        report, StatsReport::kStatsValueNameIssuerId, &certificate_id))
+    std::string issuer_id;
+    if (!GetValue(report, StatsReport::kStatsValueNameIssuerId,
+                  &issuer_id)) {
       break;
+    }
+
+    cert_id = IdFromCertIdString(issuer_id).Pass();
+    certificate_id = cert_id.get();
   }
   EXPECT_EQ(ders.size(), i);
 }
@@ -430,6 +455,20 @@ void InitVoiceReceiverInfo(cricket::VoiceReceiverInfo* voice_receiver_info) {
   voice_receiver_info->expand_rate = 121;
 }
 
+class StatsCollectorForTest : public webrtc::StatsCollector {
+ public:
+  explicit StatsCollectorForTest(WebRtcSession* session) :
+      StatsCollector(session), time_now_(19477) {
+  }
+
+  double GetTimeNow() override {
+    return time_now_;
+  }
+
+ private:
+  double time_now_;
+};
+
 class StatsCollectorTest : public testing::Test {
  protected:
   StatsCollectorTest()
@@ -438,9 +477,12 @@ class StatsCollectorTest : public testing::Test {
           new cricket::ChannelManager(media_engine_,
                                       new cricket::FakeDeviceManager(),
                                       rtc::Thread::Current())),
+      signaling_(channel_manager_.get()),
       session_(channel_manager_.get()) {
     // By default, we ignore session GetStats calls.
     EXPECT_CALL(session_, GetStats(_)).WillRepeatedly(Return(false));
+    EXPECT_CALL(session_, mediastream_signaling()).WillRepeatedly(
+        Return(&signaling_));
   }
 
   ~StatsCollectorTest() {}
@@ -504,8 +546,8 @@ class StatsCollectorTest : public testing::Test {
 
   std::string AddCandidateReport(StatsCollector* collector,
                                  const cricket::Candidate& candidate,
-                                 const std::string& report_type) {
-    return collector->AddCandidateReport(candidate, report_type);
+                                 bool local) {
+    return collector->AddCandidateReport(candidate, local);
   }
 
   void SetupAndVerifyAudioTrackStats(
@@ -587,7 +629,8 @@ class StatsCollectorTest : public testing::Test {
                               const std::vector<std::string>& local_ders,
                               const rtc::FakeSSLCertificate& remote_cert,
                               const std::vector<std::string>& remote_ders) {
-    webrtc::StatsCollector stats(&session_);  // Implementation under test.
+    StatsCollectorForTest stats(&session_);
+
     StatsReports reports;  // returned values.
 
     // Fake stats to process.
@@ -644,7 +687,8 @@ class StatsCollectorTest : public testing::Test {
         StatsReport::kStatsValueNameLocalCertificateId);
     if (local_ders.size() > 0) {
       EXPECT_NE(kNotFound, local_certificate_id);
-      CheckCertChainReports(reports, local_ders, local_certificate_id);
+      scoped_ptr<StatsReport::Id> id(IdFromCertIdString(local_certificate_id));
+      CheckCertChainReports(reports, local_ders, *id.get());
     } else {
       EXPECT_EQ(kNotFound, local_certificate_id);
     }
@@ -656,7 +700,8 @@ class StatsCollectorTest : public testing::Test {
         StatsReport::kStatsValueNameRemoteCertificateId);
     if (remote_ders.size() > 0) {
       EXPECT_NE(kNotFound, remote_certificate_id);
-      CheckCertChainReports(reports, remote_ders, remote_certificate_id);
+      scoped_ptr<StatsReport::Id> id(IdFromCertIdString(remote_certificate_id));
+      CheckCertChainReports(reports, remote_ders, *id.get());
     } else {
       EXPECT_EQ(kNotFound, remote_certificate_id);
     }
@@ -665,15 +710,63 @@ class StatsCollectorTest : public testing::Test {
   cricket::FakeMediaEngine* media_engine_;
   rtc::scoped_ptr<cricket::ChannelManager> channel_manager_;
   MockWebRtcSession session_;
+  FakeMediaStreamSignaling signaling_;
+  FakeDataChannelProvider data_channel_provider_;
   cricket::SessionStats session_stats_;
   rtc::scoped_refptr<webrtc::MediaStream> stream_;
   rtc::scoped_refptr<webrtc::VideoTrack> track_;
   rtc::scoped_refptr<FakeAudioTrack> audio_track_;
 };
 
+// Verify that ExtractDataInfo populates reports.
+TEST_F(StatsCollectorTest, ExtractDataInfo) {
+  const std::string label = "hacks";
+  const int id = 31337;
+  const std::string state = DataChannelInterface::DataStateString(
+      DataChannelInterface::DataState::kConnecting);
+
+  EXPECT_CALL(session_, video_channel()).WillRepeatedly(ReturnNull());
+  EXPECT_CALL(session_, voice_channel()).WillRepeatedly(ReturnNull());
+
+  InternalDataChannelInit config;
+  config.id = id;
+  signaling_.AddDataChannel(DataChannel::Create(
+      &data_channel_provider_, cricket::DCT_SCTP, label, config));
+  StatsCollectorForTest stats(&session_);
+
+  stats.UpdateStats(PeerConnectionInterface::kStatsOutputLevelStandard);
+
+  StatsReports reports;
+  stats.GetStats(NULL, &reports);
+
+  const StatsReport* report =
+      FindNthReportByType(reports, StatsReport::kStatsReportTypeDataChannel, 1);
+
+  scoped_ptr<StatsReport::Id> reportId = StatsReport::NewTypedIntId(
+      StatsReport::kStatsReportTypeDataChannel, id);
+
+  EXPECT_TRUE(reportId->Equals(report->id()));
+
+  EXPECT_EQ(stats.GetTimeNow(), report->timestamp());
+  EXPECT_EQ(label, ExtractStatsValue(StatsReport::kStatsReportTypeDataChannel,
+                                     reports,
+                                     StatsReport::kStatsValueNameLabel));
+  EXPECT_EQ(rtc::ToString<int64>(id),
+            ExtractStatsValue(StatsReport::kStatsReportTypeDataChannel,
+                              reports,
+                              StatsReport::kStatsValueNameDataChannelId));
+  EXPECT_EQ(state, ExtractStatsValue(StatsReport::kStatsReportTypeDataChannel,
+                                     reports,
+                                     StatsReport::kStatsValueNameState));
+  EXPECT_EQ("", ExtractStatsValue(StatsReport::kStatsReportTypeDataChannel,
+                                  reports,
+                                  StatsReport::kStatsValueNameProtocol));
+}
+
 // This test verifies that 64-bit counters are passed successfully.
 TEST_F(StatsCollectorTest, BytesCounterHandles64Bits) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   MockVideoMediaChannel* media_channel = new MockVideoMediaChannel();
   cricket::VideoChannel video_channel(rtc::Thread::Current(),
       media_engine_, media_channel, &session_, "", false, NULL);
@@ -706,7 +799,8 @@ TEST_F(StatsCollectorTest, BytesCounterHandles64Bits) {
 
 // Test that BWE information is reported via stats.
 TEST_F(StatsCollectorTest, BandwidthEstimationInfoIsReported) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   MockVideoMediaChannel* media_channel = new MockVideoMediaChannel();
   cricket::VideoChannel video_channel(rtc::Thread::Current(),
       media_engine_, media_channel, &session_, "", false, NULL);
@@ -750,7 +844,8 @@ TEST_F(StatsCollectorTest, BandwidthEstimationInfoIsReported) {
 // This test verifies that an object of type "googSession" always
 // exists in the returned stats.
 TEST_F(StatsCollectorTest, SessionObjectExists) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   StatsReports reports;  // returned values.
   EXPECT_CALL(session_, video_channel()).WillRepeatedly(ReturnNull());
   EXPECT_CALL(session_, voice_channel()).WillRepeatedly(ReturnNull());
@@ -764,7 +859,8 @@ TEST_F(StatsCollectorTest, SessionObjectExists) {
 // This test verifies that only one object of type "googSession" exists
 // in the returned stats.
 TEST_F(StatsCollectorTest, OnlyOneSessionObjectExists) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   StatsReports reports;  // returned values.
   EXPECT_CALL(session_, video_channel()).WillRepeatedly(ReturnNull());
   EXPECT_CALL(session_, voice_channel()).WillRepeatedly(ReturnNull());
@@ -782,7 +878,8 @@ TEST_F(StatsCollectorTest, OnlyOneSessionObjectExists) {
 // This test verifies that the empty track report exists in the returned stats
 // without calling StatsCollector::UpdateStats.
 TEST_F(StatsCollectorTest, TrackObjectExistsWithoutUpdateStats) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   MockVideoMediaChannel* media_channel = new MockVideoMediaChannel();
   cricket::VideoChannel video_channel(rtc::Thread::Current(),
       media_engine_, media_channel, &session_, "", false, NULL);
@@ -793,8 +890,7 @@ TEST_F(StatsCollectorTest, TrackObjectExistsWithoutUpdateStats) {
   StatsReports reports;
   stats.GetStats(NULL, &reports);
   EXPECT_EQ((size_t)1, reports.size());
-  EXPECT_EQ(std::string(StatsReport::kStatsReportTypeTrack),
-            reports[0]->type);
+  EXPECT_EQ(StatsReport::kStatsReportTypeTrack, reports[0]->type());
 
   std::string trackValue =
       ExtractStatsValue(StatsReport::kStatsReportTypeTrack,
@@ -806,7 +902,8 @@ TEST_F(StatsCollectorTest, TrackObjectExistsWithoutUpdateStats) {
 // This test verifies that the empty track report exists in the returned stats
 // when StatsCollector::UpdateStats is called with ssrc stats.
 TEST_F(StatsCollectorTest, TrackAndSsrcObjectExistAfterUpdateSsrcStats) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   MockVideoMediaChannel* media_channel = new MockVideoMediaChannel();
   cricket::VideoChannel video_channel(rtc::Thread::Current(),
       media_engine_, media_channel, &session_, "", false, NULL);
@@ -861,7 +958,8 @@ TEST_F(StatsCollectorTest, TrackAndSsrcObjectExistAfterUpdateSsrcStats) {
 // This test verifies that an SSRC object has the identifier of a Transport
 // stats object, and that this transport stats object exists in stats.
 TEST_F(StatsCollectorTest, TransportObjectLinkedFromSsrcObject) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   // Ignore unused callback (logspam).
   EXPECT_CALL(session_, GetTransport(_))
       .WillRepeatedly(Return(static_cast<cricket::Transport*>(NULL)));
@@ -902,15 +1000,27 @@ TEST_F(StatsCollectorTest, TransportObjectLinkedFromSsrcObject) {
       reports,
       StatsReport::kStatsValueNameTransportId);
   ASSERT_NE(kNotFound, transport_id);
-  const StatsReport* transport_report = FindReportById(reports,
-                                                       transport_id);
+  // Transport id component ID will always be 1.
+  // This has assumptions about how the ID is constructed.  As is, this is
+  // OK since this is for testing purposes only, but if we ever need this
+  // in production, we should add a generic method that does this.
+  size_t index = transport_id.find('-');
+  ASSERT_NE(std::string::npos, index);
+  std::string content = transport_id.substr(index + 1);
+  index = content.rfind('-');
+  ASSERT_NE(std::string::npos, index);
+  content = content.substr(0, index);
+  scoped_ptr<StatsReport::Id> id(StatsReport::NewComponentId(content, 1));
+  ASSERT_EQ(transport_id, id->ToString());
+  const StatsReport* transport_report = FindReportById(reports, *id.get());
   ASSERT_FALSE(transport_report == NULL);
 }
 
 // This test verifies that a remote stats object will not be created for
 // an outgoing SSRC where remote stats are not returned.
 TEST_F(StatsCollectorTest, RemoteSsrcInfoIsAbsent) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   MockVideoMediaChannel* media_channel = new MockVideoMediaChannel();
   // The content_name known by the video channel.
   const std::string kVcName("vcname");
@@ -933,7 +1043,8 @@ TEST_F(StatsCollectorTest, RemoteSsrcInfoIsAbsent) {
 // This test verifies that a remote stats object will be created for
 // an outgoing SSRC where stats are returned.
 TEST_F(StatsCollectorTest, RemoteSsrcInfoIsPresent) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   // Ignore unused callback (logspam).
   EXPECT_CALL(session_, GetTransport(_))
       .WillRepeatedly(Return(static_cast<cricket::Transport*>(NULL)));
@@ -975,13 +1086,14 @@ TEST_F(StatsCollectorTest, RemoteSsrcInfoIsPresent) {
   const StatsReport* remote_report = FindNthReportByType(reports,
       StatsReport::kStatsReportTypeRemoteSsrc, 1);
   EXPECT_FALSE(remote_report == NULL);
-  EXPECT_NE(0, remote_report->timestamp);
+  EXPECT_EQ(12345.678, remote_report->timestamp());
 }
 
 // This test verifies that the empty track report exists in the returned stats
 // when StatsCollector::UpdateStats is called with ssrc stats.
 TEST_F(StatsCollectorTest, ReportsFromRemoteTrack) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   MockVideoMediaChannel* media_channel = new MockVideoMediaChannel();
   cricket::VideoChannel video_channel(rtc::Thread::Current(),
       media_engine_, media_channel, &session_, "", false, NULL);
@@ -1026,7 +1138,8 @@ TEST_F(StatsCollectorTest, ReportsFromRemoteTrack) {
 // This test verifies the Ice Candidate report should contain the correct
 // information from local/remote candidates.
 TEST_F(StatsCollectorTest, IceCandidateReport) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   StatsReports reports;                     // returned values.
 
   const int local_port = 2000;
@@ -1040,24 +1153,24 @@ TEST_F(StatsCollectorTest, IceCandidateReport) {
   uint32 priority = 1000;
 
   cricket::Candidate c;
-  const std::string& local_id = rtc::CreateRandomString(8);
-  c.set_id(local_id);
+  ASSERT(c.id().length() > 0);
   c.set_type(cricket::LOCAL_PORT_TYPE);
   c.set_protocol(cricket::UDP_PROTOCOL_NAME);
   c.set_address(local_address);
   c.set_priority(priority);
   c.set_network_type(network_type);
-  std::string report_id = AddCandidateReport(
-      &stats, c, StatsReport::kStatsReportTypeIceLocalCandidate);
-  EXPECT_EQ("Cand-" + local_id, report_id);
+  std::string report_id = AddCandidateReport(&stats, c, true);
+  EXPECT_EQ("Cand-" + c.id(), report_id);
 
-  const std::string& remote_id = rtc::CreateRandomString(8);
-  c.set_id(remote_id);
+  c = cricket::Candidate();
+  ASSERT(c.id().length() > 0);
   c.set_type(cricket::PRFLX_PORT_TYPE);
+  c.set_protocol(cricket::UDP_PROTOCOL_NAME);
   c.set_address(remote_address);
-  report_id = AddCandidateReport(
-      &stats, c, StatsReport::kStatsReportTypeIceRemoteCandidate);
-  EXPECT_EQ("Cand-" + remote_id, report_id);
+  c.set_priority(priority);
+  c.set_network_type(network_type);
+  report_id = AddCandidateReport(&stats, c, false);
+  EXPECT_EQ("Cand-" + c.id(), report_id);
 
   stats.GetStats(NULL, &reports);
 
@@ -1155,7 +1268,8 @@ TEST_F(StatsCollectorTest, ChainlessCertificateReportsCreated) {
 // This test verifies that the stats are generated correctly when no
 // transport is present.
 TEST_F(StatsCollectorTest, NoTransport) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   StatsReports reports;  // returned values.
 
   // Fake stats to process.
@@ -1201,7 +1315,8 @@ TEST_F(StatsCollectorTest, NoTransport) {
 // This test verifies that the stats are generated correctly when the transport
 // does not have any certificates.
 TEST_F(StatsCollectorTest, NoCertificates) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   StatsReports reports;  // returned values.
 
   // Fake stats to process.
@@ -1269,7 +1384,8 @@ TEST_F(StatsCollectorTest, UnsupportedDigestIgnored) {
 // Verifies the correct optons are passed to the VideoMediaChannel when using
 // verbose output level.
 TEST_F(StatsCollectorTest, StatsOutputLevelVerbose) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   MockVideoMediaChannel* media_channel = new MockVideoMediaChannel();
   cricket::VideoChannel video_channel(rtc::Thread::Current(),
       media_engine_, media_channel, &session_, "", false, NULL);
@@ -1314,7 +1430,8 @@ TEST_F(StatsCollectorTest, StatsOutputLevelVerbose) {
 // This test verifies that a local stats object can get statistics via
 // AudioTrackInterface::GetStats() method.
 TEST_F(StatsCollectorTest, GetStatsFromLocalAudioTrack) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   // Ignore unused callback (logspam).
   EXPECT_CALL(session_, GetTransport(_))
       .WillRepeatedly(Return(static_cast<cricket::Transport*>(NULL)));
@@ -1347,7 +1464,8 @@ TEST_F(StatsCollectorTest, GetStatsFromLocalAudioTrack) {
 // This test verifies that audio receive streams populate stats reports
 // correctly.
 TEST_F(StatsCollectorTest, GetStatsFromRemoteStream) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   // Ignore unused callback (logspam).
   EXPECT_CALL(session_, GetTransport(_))
       .WillRepeatedly(Return(static_cast<cricket::Transport*>(NULL)));
@@ -1373,7 +1491,8 @@ TEST_F(StatsCollectorTest, GetStatsFromRemoteStream) {
 // This test verifies that a local stats object won't update its statistics
 // after a RemoveLocalAudioTrack() call.
 TEST_F(StatsCollectorTest, GetStatsAfterRemoveAudioStream) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   // Ignore unused callback (logspam).
   EXPECT_CALL(session_, GetTransport(_))
       .WillRepeatedly(Return(static_cast<cricket::Transport*>(NULL)));
@@ -1430,7 +1549,8 @@ TEST_F(StatsCollectorTest, GetStatsAfterRemoveAudioStream) {
 // This test verifies that when ongoing and incoming audio tracks are using
 // the same ssrc, they populate stats reports correctly.
 TEST_F(StatsCollectorTest, LocalAndRemoteTracksWithSameSsrc) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   // Ignore unused callback (logspam).
   EXPECT_CALL(session_, GetTransport(_))
       .WillRepeatedly(Return(static_cast<cricket::Transport*>(NULL)));
@@ -1512,7 +1632,8 @@ TEST_F(StatsCollectorTest, LocalAndRemoteTracksWithSameSsrc) {
 // TODO(xians): Figure out if it is possible to encapsulate the setup and
 // avoid duplication of code in test cases.
 TEST_F(StatsCollectorTest, TwoLocalTracksWithSameSsrc) {
-  webrtc::StatsCollector stats(&session_);  // Implementation under test.
+  StatsCollectorForTest stats(&session_);
+
   // Ignore unused callback (logspam).
   EXPECT_CALL(session_, GetTransport(_))
       .WillRepeatedly(Return(static_cast<cricket::Transport*>(NULL)));

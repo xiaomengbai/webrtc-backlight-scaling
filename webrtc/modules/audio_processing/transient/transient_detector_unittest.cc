@@ -76,7 +76,7 @@ TEST(TransientDetectorTest, CorrectnessBasedOnFiles) {
     const size_t buffer_length = sample_rate_hz * ts::kChunkSizeMs / 1000;
     scoped_ptr<float[]> buffer(new float[buffer_length]);
 
-    const float kTolerance = 0.01f;
+    const float kTolerance = 0.02f;
 
     size_t frames_read = 0;
 

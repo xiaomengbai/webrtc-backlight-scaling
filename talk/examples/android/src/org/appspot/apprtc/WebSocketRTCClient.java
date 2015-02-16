@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2014, Google Inc.
+ * Copyright 2014 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -24,22 +24,18 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 package org.appspot.apprtc;
-
-import android.os.Handler;
-import android.os.Looper;
-import android.util.Log;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.util.Scanner;
 
 import org.appspot.apprtc.RoomParametersFetcher.RoomParametersFetcherEvents;
 import org.appspot.apprtc.WebSocketChannelClient.WebSocketChannelEvents;
 import org.appspot.apprtc.WebSocketChannelClient.WebSocketConnectionState;
+import org.appspot.apprtc.util.AsyncHttpURLConnection;
+import org.appspot.apprtc.util.AsyncHttpURLConnection.AsyncHttpEvents;
+import org.appspot.apprtc.util.LooperExecutor;
+
+import android.util.Log;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.webrtc.IceCandidate;
@@ -49,86 +45,243 @@ import org.webrtc.SessionDescription;
  * Negotiates signaling for chatting with apprtc.appspot.com "rooms".
  * Uses the client<->server specifics of the apprtc AppEngine webapp.
  *
- * To use: create an instance of this object (registering a message handler) and
+ * <p>To use: create an instance of this object (registering a message handler) and
  * call connectToRoom().  Once room connection is established
  * onConnectedToRoom() callback with room parameters is invoked.
  * Messages to other party (with local Ice candidates and answer SDP) can
  * be sent after WebSocket connection is established.
  */
 public class WebSocketRTCClient implements AppRTCClient,
-    RoomParametersFetcherEvents, WebSocketChannelEvents {
+    WebSocketChannelEvents {
   private static final String TAG = "WSRTCClient";
+  private static final String ROOM_JOIN = "join";
+  private static final String ROOM_MESSAGE = "message";
+  private static final String ROOM_LEAVE = "leave";
 
   private enum ConnectionState {
     NEW, CONNECTED, CLOSED, ERROR
   };
   private enum MessageType {
-    MESSAGE, BYE
+    MESSAGE, LEAVE
   };
-  private final Handler uiHandler;
-  private boolean loopback;
+  private final LooperExecutor executor;
   private boolean initiator;
   private SignalingEvents events;
   private WebSocketChannelClient wsClient;
-  private RoomParametersFetcher fetcher;
   private ConnectionState roomState;
-  private String postMessageUrl;
-  private String byeMessageUrl;
+  private RoomConnectionParameters connectionParameters;
+  private String messageUrl;
+  private String leaveUrl;
 
-  public WebSocketRTCClient(SignalingEvents events) {
+  public WebSocketRTCClient(SignalingEvents events, LooperExecutor executor) {
     this.events = events;
-    uiHandler = new Handler(Looper.getMainLooper());
+    this.executor = executor;
+    roomState = ConnectionState.NEW;
   }
 
   // --------------------------------------------------------------------
-  // RoomConnectionEvents interface implementation.
-  // All events are called on UI thread.
+  // AppRTCClient interface implementation.
+  // Asynchronously connect to an AppRTC room URL using supplied connection
+  // parameters, retrieves room parameters and connect to WebSocket server.
   @Override
-  public void onSignalingParametersReady(final SignalingParameters params) {
-    Log.d(TAG, "Room connection completed.");
-    if (loopback && (!params.initiator || params.offerSdp != null)) {
-      reportError("Loopback room is busy.");
-      return;
-    }
-    if (!loopback && !params.initiator && params.offerSdp == null) {
-      Log.w(TAG, "No offer SDP in room response.");
-    }
-    initiator = params.initiator;
-    postMessageUrl = params.roomUrl + "/message/" +
-        params.roomId + "/" + params.clientId;
-    byeMessageUrl = params.roomUrl + "/bye/" +
-        params.roomId + "/" + params.clientId;
-    roomState = ConnectionState.CONNECTED;
-
-    // Connect to WebSocket server.
-    wsClient.connect(params.wssUrl, params.wssPostUrl);
-    wsClient.setClientParameters(params.roomId, params.clientId);
-
-    // Fire connection and signaling parameters events.
-    events.onConnectedToRoom(params);
-    events.onChannelOpen();
-    if (!params.initiator) {
-      // For call receiver get sdp offer and ice candidates
-      // from room parameters.
-      if (params.offerSdp != null) {
-        events.onRemoteDescription(params.offerSdp);
+  public void connectToRoom(RoomConnectionParameters connectionParameters) {
+    this.connectionParameters = connectionParameters;
+    executor.requestStart();
+    executor.execute(new Runnable() {
+      @Override
+      public void run() {
+        connectToRoomInternal();
       }
-      if (params.iceCandidates != null) {
-        for (IceCandidate iceCandidate : params.iceCandidates) {
-          events.onRemoteIceCandidate(iceCandidate);
-        }
-      }
-    }
+    });
   }
 
   @Override
-  public void onSignalingParametersError(final String description) {
-    reportError("Room connection error: " + description);
+  public void disconnectFromRoom() {
+    executor.execute(new Runnable() {
+      @Override
+      public void run() {
+        disconnectFromRoomInternal();
+      }
+    });
+    executor.requestStop();
+  }
+
+  // Connects to room - function runs on a local looper thread.
+  private void connectToRoomInternal() {
+    String connectionUrl = getConnectionUrl(connectionParameters);
+    Log.d(TAG, "Connect to room: " + connectionUrl);
+    roomState = ConnectionState.NEW;
+    wsClient = new WebSocketChannelClient(executor, this);
+
+    RoomParametersFetcherEvents callbacks = new RoomParametersFetcherEvents() {
+      @Override
+      public void onSignalingParametersReady(
+          final SignalingParameters params) {
+        WebSocketRTCClient.this.executor.execute(new Runnable() {
+          @Override
+          public void run() {
+            WebSocketRTCClient.this.signalingParametersReady(params);
+          }
+        });
+      }
+
+      @Override
+      public void onSignalingParametersError(String description) {
+        WebSocketRTCClient.this.reportError(description);
+      }
+    };
+
+    new RoomParametersFetcher(connectionParameters.loopback, connectionUrl,
+        null, callbacks).makeRequest();
+  }
+
+  // Disconnect from room and send bye messages - runs on a local looper thread.
+  private void disconnectFromRoomInternal() {
+    Log.d(TAG, "Disconnect. Room state: " + roomState);
+    if (roomState == ConnectionState.CONNECTED) {
+      Log.d(TAG, "Closing room.");
+      sendPostMessage(MessageType.LEAVE, leaveUrl, null);
+    }
+    roomState = ConnectionState.CLOSED;
+    if (wsClient != null) {
+      wsClient.disconnect(true);
+    }
+  }
+
+  // Helper functions to get connection, post message and leave message URLs
+  private String getConnectionUrl(
+      RoomConnectionParameters connectionParameters) {
+    return connectionParameters.roomUrl + "/" + ROOM_JOIN + "/"
+        + connectionParameters.roomId;
+  }
+
+  private String getMessageUrl(RoomConnectionParameters connectionParameters,
+      SignalingParameters signalingParameters) {
+    return connectionParameters.roomUrl + "/" + ROOM_MESSAGE + "/"
+      + connectionParameters.roomId + "/" + signalingParameters.clientId;
+  }
+
+  private String getLeaveUrl(RoomConnectionParameters connectionParameters,
+      SignalingParameters signalingParameters) {
+    return connectionParameters.roomUrl + "/" + ROOM_LEAVE + "/"
+        + connectionParameters.roomId + "/" + signalingParameters.clientId;
+  }
+
+  // Callback issued when room parameters are extracted. Runs on local
+  // looper thread.
+  private void signalingParametersReady(
+      final SignalingParameters signalingParameters) {
+    Log.d(TAG, "Room connection completed.");
+    if (connectionParameters.loopback
+        && (!signalingParameters.initiator
+            || signalingParameters.offerSdp != null)) {
+      reportError("Loopback room is busy.");
+      return;
+    }
+    if (!connectionParameters.loopback
+        && !signalingParameters.initiator
+        && signalingParameters.offerSdp == null) {
+      Log.w(TAG, "No offer SDP in room response.");
+    }
+    initiator = signalingParameters.initiator;
+    messageUrl = getMessageUrl(connectionParameters, signalingParameters);
+    leaveUrl = getLeaveUrl(connectionParameters, signalingParameters);
+    Log.d(TAG, "Message URL: " + messageUrl);
+    Log.d(TAG, "Leave URL: " + leaveUrl);
+    roomState = ConnectionState.CONNECTED;
+
+    // Fire connection and signaling parameters events.
+    events.onConnectedToRoom(signalingParameters);
+
+    // Connect to WebSocket server.
+    wsClient.connect(signalingParameters.wssUrl, signalingParameters.wssPostUrl,
+        connectionParameters.roomId, signalingParameters.clientId);
+  }
+
+  // Send local offer SDP to the other participant.
+  @Override
+  public void sendOfferSdp(final SessionDescription sdp) {
+    executor.execute(new Runnable() {
+      @Override
+      public void run() {
+        if (roomState != ConnectionState.CONNECTED) {
+          reportError("Sending offer SDP in non connected state.");
+          return;
+        }
+        JSONObject json = new JSONObject();
+        jsonPut(json, "sdp", sdp.description);
+        jsonPut(json, "type", "offer");
+        sendPostMessage(MessageType.MESSAGE, messageUrl, json.toString());
+        if (connectionParameters.loopback) {
+          // In loopback mode rename this offer to answer and route it back.
+          SessionDescription sdpAnswer = new SessionDescription(
+              SessionDescription.Type.fromCanonicalForm("answer"),
+              sdp.description);
+          events.onRemoteDescription(sdpAnswer);
+        }
+      }
+    });
+  }
+
+  // Send local answer SDP to the other participant.
+  @Override
+  public void sendAnswerSdp(final SessionDescription sdp) {
+    executor.execute(new Runnable() {
+      @Override
+      public void run() {
+        if (connectionParameters.loopback) {
+          Log.e(TAG, "Sending answer in loopback mode.");
+          return;
+        }
+        if (wsClient.getState() != WebSocketConnectionState.REGISTERED) {
+          reportError("Sending answer SDP in non registered state.");
+          return;
+        }
+        JSONObject json = new JSONObject();
+        jsonPut(json, "sdp", sdp.description);
+        jsonPut(json, "type", "answer");
+        wsClient.send(json.toString());
+      }
+    });
+  }
+
+  // Send Ice candidate to the other participant.
+  @Override
+  public void sendLocalIceCandidate(final IceCandidate candidate) {
+    executor.execute(new Runnable() {
+      @Override
+      public void run() {
+        JSONObject json = new JSONObject();
+        jsonPut(json, "type", "candidate");
+        jsonPut(json, "label", candidate.sdpMLineIndex);
+        jsonPut(json, "id", candidate.sdpMid);
+        jsonPut(json, "candidate", candidate.sdp);
+        if (initiator) {
+          // Call initiator sends ice candidates to GAE server.
+          if (roomState != ConnectionState.CONNECTED) {
+            reportError("Sending ICE candidate in non connected state.");
+            return;
+          }
+          sendPostMessage(MessageType.MESSAGE, messageUrl, json.toString());
+          if (connectionParameters.loopback) {
+            events.onRemoteIceCandidate(candidate);
+          }
+        } else {
+          // Call receiver sends ice candidates to websocket server.
+          if (wsClient.getState() != WebSocketConnectionState.REGISTERED) {
+            reportError("Sending ICE candidate in non registered state.");
+            return;
+          }
+          wsClient.send(json.toString());
+        }
+      }
+    });
   }
 
   // --------------------------------------------------------------------
   // WebSocketChannelEvents interface implementation.
-  // All events are called on UI thread.
+  // All events are called by WebSocketChannelClient on a local looper thread
+  // (passed to WebSocket client constructor).
   @Override
   public void onWebSocketOpen() {
     Log.d(TAG, "Websocket connection completed. Registering...");
@@ -177,8 +330,7 @@ public class WebSocketRTCClient implements AppRTCClient,
         } else {
           reportError("Unexpected WebSocket message: " + msg);
         }
-      }
-      else {
+      } else {
         if (errorText != null && errorText.length() > 0) {
           reportError("WebSocket error message: " + errorText);
         } else {
@@ -201,107 +353,11 @@ public class WebSocketRTCClient implements AppRTCClient,
   }
 
   // --------------------------------------------------------------------
-  // AppRTCClient interface implementation.
-  // Asynchronously connect to an AppRTC room URL, e.g.
-  // https://apprtc.appspot.com/register/<room>, retrieve room parameters
-  // and connect to WebSocket server.
-  @Override
-  public void connectToRoom(String url, boolean loopback) {
-    this.loopback = loopback;
-    // Create WebSocket client.
-    wsClient = new WebSocketChannelClient(this);
-    // Get room parameters.
-    roomState = ConnectionState.NEW;
-    fetcher = new RoomParametersFetcher(this, true, loopback);
-    fetcher.execute(url);
-  }
-
-  @Override
-  public void disconnect() {
-    Log.d(TAG, "Disconnect. Room state: " + roomState);
-    if (roomState == ConnectionState.CONNECTED) {
-      Log.d(TAG, "Closing room.");
-      sendPostMessage(MessageType.BYE, byeMessageUrl, "");
-    }
-    roomState = ConnectionState.CLOSED;
-    if (wsClient != null) {
-      wsClient.disconnect();
-    }
-  }
-
-  // Send local SDP (offer or answer, depending on role) to the
-  // other participant.  Note that it is important to send the output of
-  // create{Offer,Answer} and not merely the current value of
-  // getLocalDescription() because the latter may include ICE candidates that
-  // we might want to filter elsewhere.
-  @Override
-  public void sendOfferSdp(final SessionDescription sdp) {
-    if (roomState != ConnectionState.CONNECTED) {
-      reportError("Sending offer SDP in non connected state.");
-      return;
-    }
-    JSONObject json = new JSONObject();
-    jsonPut(json, "sdp", sdp.description);
-    jsonPut(json, "type", "offer");
-    sendPostMessage(MessageType.MESSAGE, postMessageUrl, json.toString());
-    if (loopback) {
-      // In loopback mode rename this offer to answer and route it back.
-      SessionDescription sdpAnswer = new SessionDescription(
-          SessionDescription.Type.fromCanonicalForm("answer"),
-          sdp.description);
-      events.onRemoteDescription(sdpAnswer);
-    }
-  }
-
-  @Override
-  public void sendAnswerSdp(final SessionDescription sdp) {
-    if (loopback) {
-      Log.e(TAG, "Sending answer in loopback mode.");
-      return;
-    }
-    if (wsClient.getState() != WebSocketConnectionState.REGISTERED) {
-      reportError("Sending answer SDP in non registered state.");
-      return;
-    }
-    JSONObject json = new JSONObject();
-    jsonPut(json, "sdp", sdp.description);
-    jsonPut(json, "type", "answer");
-    wsClient.send(json.toString());
-  }
-
-  // Send Ice candidate to the other participant.
-  @Override
-  public void sendLocalIceCandidate(final IceCandidate candidate) {
-    JSONObject json = new JSONObject();
-    jsonPut(json, "type", "candidate");
-    jsonPut(json, "label", candidate.sdpMLineIndex);
-    jsonPut(json, "id", candidate.sdpMid);
-    jsonPut(json, "candidate", candidate.sdp);
-    if (initiator) {
-      // Call initiator sends ice candidates to GAE server.
-      if (roomState != ConnectionState.CONNECTED) {
-        reportError("Sending ICE candidate in non connected state.");
-        return;
-      }
-      sendPostMessage(MessageType.MESSAGE, postMessageUrl, json.toString());
-      if (loopback) {
-        events.onRemoteIceCandidate(candidate);
-      }
-    } else {
-      // Call receiver sends ice candidates to websocket server.
-      if (wsClient.getState() != WebSocketConnectionState.REGISTERED) {
-        reportError("Sending ICE candidate in non registered state.");
-        return;
-      }
-      wsClient.send(json.toString());
-    }
-  }
-
-  // --------------------------------------------------------------------
   // Helper functions.
   private void reportError(final String errorMessage) {
     Log.e(TAG, errorMessage);
-    uiHandler.post(new Runnable() {
+    executor.execute(new Runnable() {
+      @Override
       public void run() {
         if (roomState != ConnectionState.ERROR) {
           roomState = ConnectionState.ERROR;
@@ -320,81 +376,36 @@ public class WebSocketRTCClient implements AppRTCClient,
     }
   }
 
-  private class PostMessage {
-    PostMessage(MessageType type, String postUrl, String message) {
-      this.messageType = type;
-      this.postUrl = postUrl;
-      this.message = message;
+  // Send SDP or ICE candidate to a room server.
+  private void sendPostMessage(
+      final MessageType messageType, final String url, final String message) {
+    String logInfo = url;
+    if (message != null) {
+      logInfo += ". Message: " + message;
     }
-    public final MessageType messageType;
-    public final String postUrl;
-    public final String message;
-  }
-
-  // Queue a message for sending to the room  and send it if already connected.
-  private synchronized void sendPostMessage(
-      MessageType messageType, String url, String message) {
-    final PostMessage postMessage = new PostMessage(messageType, url, message);
-    Runnable runDrain = new Runnable() {
-      public void run() {
-        sendPostMessageAsync(postMessage);
-      }
-    };
-    new Thread(runDrain).start();
-  }
-
-  // Send all queued POST messages to app engine server.
-  private void sendPostMessageAsync(PostMessage postMessage) {
-    if (postMessage.messageType == MessageType.BYE) {
-      Log.d(TAG, "C->GAE: " + postMessage.postUrl);
-    } else {
-      Log.d(TAG, "C->GAE: " + postMessage.message);
-    }
-    try {
-      // Get connection.
-      HttpURLConnection connection =
-        (HttpURLConnection) new URL(postMessage.postUrl).openConnection();
-      byte[] postData = postMessage.message.getBytes("UTF-8");
-      connection.setUseCaches(false);
-      connection.setDoOutput(true);
-      connection.setDoInput(true);
-      connection.setRequestMethod("POST");
-      connection.setFixedLengthStreamingMode(postData.length);
-      connection.setRequestProperty(
-          "content-type", "text/plain; charset=utf-8");
-
-      // Send POST request.
-      OutputStream outStream = connection.getOutputStream();
-      outStream.write(postData);
-      outStream.close();
-
-      // Get response.
-      int responseCode = connection.getResponseCode();
-      if (responseCode != 200) {
-        reportError("Non-200 response to POST: " +
-            connection.getHeaderField(null));
-      }
-      InputStream responseStream = connection.getInputStream();
-      String response = drainStream(responseStream);
-      responseStream.close();
-      if (postMessage.messageType == MessageType.MESSAGE) {
-        JSONObject roomJson = new JSONObject(response);
-        String result = roomJson.getString("result");
-        if (!result.equals("SUCCESS")) {
-          reportError("Room POST error: " + result);
+    Log.d(TAG, "C->GAE: " + logInfo);
+    AsyncHttpURLConnection httpConnection = new AsyncHttpURLConnection(
+      "POST", url, message, new AsyncHttpEvents() {
+        @Override
+        public void onHttpError(String errorMessage) {
+          reportError("GAE POST error: " + errorMessage);
         }
-      }
-    } catch (IOException e) {
-      reportError("GAE POST error: " + e.getMessage());
-    } catch (JSONException e) {
-      reportError("GAE POST JSON error: " + e.getMessage());
-    }
-  }
 
-  // Return the contents of an InputStream as a String.
-  private String drainStream(InputStream in) {
-    Scanner s = new Scanner(in).useDelimiter("\\A");
-    return s.hasNext() ? s.next() : "";
+        @Override
+        public void onHttpComplete(String response) {
+          if (messageType == MessageType.MESSAGE) {
+            try {
+              JSONObject roomJson = new JSONObject(response);
+              String result = roomJson.getString("result");
+              if (!result.equals("SUCCESS")) {
+                reportError("GAE POST error: " + result);
+              }
+            } catch (JSONException e) {
+              reportError("GAE POST JSON error: " + e.toString());
+            }
+          }
+        }
+      });
+    httpConnection.send();
   }
-
 }

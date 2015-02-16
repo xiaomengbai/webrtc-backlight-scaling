@@ -45,8 +45,6 @@ DIRECTORIES = [
   'third_party/icu',
   'third_party/instrumented_libraries',
   'third_party/jsoncpp',
-  'third_party/libc++',
-  'third_party/libc++abi',
   'third_party/libjpeg',
   'third_party/libjpeg_turbo',
   'third_party/libsrtp',
@@ -55,6 +53,7 @@ DIRECTORIES = [
   'third_party/libyuv',
   'third_party/llvm-build',
   'third_party/nss',
+  'third_party/ocmock',
   'third_party/openmax_dl',
   'third_party/opus',
   'third_party/protobuf',
@@ -81,12 +80,15 @@ if 'android' in get_target_os_list():
     'base',
     'third_party/android_testrunner',
     'third_party/android_tools',
+    'third_party/appurify-python',
     'third_party/ashmem',
     'third_party/jsr-305',
     'third_party/libevent',
     'third_party/libxml',
     'third_party/modp_b64',
+    'third_party/requests',
     'tools/android',
+    'tools/grit',
     'tools/relocation_packer'
   ]
 

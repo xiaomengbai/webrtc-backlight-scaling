@@ -8,7 +8,6 @@
 
 # TODO(kjellander): Rebase this to webrtc/build/common.gypi changes after r6330.
 
-import("//build/config/arm.gni")
 import("//build/config/crypto.gni")
 import("//build/config/linux/pkg_config.gni")
 import("build/webrtc.gni")
@@ -150,7 +149,7 @@ config("common_config") {
     } else {
       cflags += [ "-msoft-float" ]
     }
-    if (mips_arch_variant == "mips32r2") {
+    if (mips_arch_variant == "r2") {
       defines += [ "MIPS32_R2_LE" ]
       cflags += [ "-mips32r2" ]
       cflags_cc += [ "-mips32r2" ]
@@ -198,7 +197,7 @@ source_set("webrtc") {
 
   deps = [
     ":webrtc_common",
-    "base:webrtc_base",
+    "base:rtc_base",
     "common_audio",
     "common_video",
     "modules/audio_coding",
@@ -210,16 +209,21 @@ source_set("webrtc") {
     "modules/media_file",
     "modules/rtp_rtcp",
     "modules/utility",
-    "modules/video_capture",
     "modules/video_coding",
     "modules/video_processing",
-    "modules/video_render",
     "system_wrappers",
     "tools",
     "video",
     "video_engine",
     "voice_engine",
   ]
+
+  if (build_with_chromium) {
+    deps += [
+    "modules/video_capture",
+    "modules/video_render",
+    ]
+  }
 }
 
 if (!build_with_chromium) {
@@ -236,8 +240,11 @@ if (!build_with_chromium) {
 
 source_set("webrtc_common") {
   sources = [
+    "common_types.h",
     "config.h",
     "config.cc",
+    "engine_configurations.h",
+    "typedefs.h",
   ]
 
   if (is_clang) {
@@ -248,4 +255,10 @@ source_set("webrtc_common") {
 
   configs += [ ":common_config" ]
   public_configs = [ ":common_inherited_config" ]
+}
+
+source_set("gtest_prod") {
+  sources = [
+    "test/testsupport/gtest_prod_util.h",
+  ]
 }

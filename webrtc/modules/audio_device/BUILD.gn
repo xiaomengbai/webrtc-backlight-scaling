@@ -141,6 +141,7 @@ source_set("audio_device") {
       libs = [
         "AudioToolbox.framework",
         "AVFoundation.framework",
+        "Foundation.framework",
       ]
     }
     if (is_win) {
@@ -177,6 +178,7 @@ source_set("audio_device") {
   }
 
   deps = [
+    "../../base:rtc_base_approved",
     "../../common_audio",
     "../../system_wrappers",
     "../utility",

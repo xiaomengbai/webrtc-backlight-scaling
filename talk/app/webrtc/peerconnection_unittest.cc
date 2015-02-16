@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2012, Google Inc.
+ * Copyright 2012 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -46,14 +46,16 @@
 #include "talk/app/webrtc/test/mockpeerconnectionobservers.h"
 #include "talk/app/webrtc/videosourceinterface.h"
 #include "talk/media/webrtc/fakewebrtcvideoengine.h"
-#include "webrtc/p2p/base/constants.h"
-#include "webrtc/p2p/base/sessiondescription.h"
 #include "talk/session/media/mediasession.h"
 #include "webrtc/base/gunit.h"
+#include "webrtc/base/physicalsocketserver.h"
 #include "webrtc/base/scoped_ptr.h"
 #include "webrtc/base/ssladapter.h"
 #include "webrtc/base/sslstreamadapter.h"
 #include "webrtc/base/thread.h"
+#include "webrtc/base/virtualsocketserver.h"
+#include "webrtc/p2p/base/constants.h"
+#include "webrtc/p2p/base/sessiondescription.h"
 
 #define MAYBE_SKIP_TEST(feature)                    \
   if (!(feature())) {                               \
@@ -90,7 +92,6 @@ static const int kMaxWaitMs = 2000;
 // warnings.
 #if !defined(THREAD_SANITIZER)
 static const int kMaxWaitForStatsMs = 3000;
-static const int kMaxWaitForRembMs = 5000;
 #endif
 static const int kMaxWaitForFramesMs = 10000;
 static const int kEndAudioFrameCount = 3;
@@ -869,10 +870,16 @@ class JsepTestClient
 template <typename SignalingClass>
 class P2PTestConductor : public testing::Test {
  public:
+  P2PTestConductor()
+      : pss_(new rtc::PhysicalSocketServer),
+        ss_(new rtc::VirtualSocketServer(pss_.get())),
+        ss_scope_(ss_.get()) {}
+
   bool SessionActive() {
     return initiating_client_->SessionActive() &&
-        receiving_client_->SessionActive();
+           receiving_client_->SessionActive();
   }
+
   // Return true if the number of frames provided have been received or it is
   // known that that will never occur (e.g. no frames will be sent or
   // captured).
@@ -1030,34 +1037,13 @@ class P2PTestConductor : public testing::Test {
     }
   }
 
-  // Wait until 'size' bytes of audio has been seen by the receiver, on the
-  // first audio stream.
-  void WaitForAudioData(int size) {
-    const int kMaxWaitForAudioDataMs = 10000;
-
-    StreamCollectionInterface* local_streams =
-        initializing_client()->local_streams();
-    ASSERT_GT(local_streams->count(), 0u);
-    ASSERT_GT(local_streams->at(0)->GetAudioTracks().size(), 0u);
-    MediaStreamTrackInterface* local_audio_track =
-        local_streams->at(0)->GetAudioTracks()[0];
-
-    // Wait until *any* audio has been received.
-    EXPECT_TRUE_WAIT(
-        receiving_client()->GetBytesReceivedStats(local_audio_track) > 0,
-        kMaxWaitForAudioDataMs);
-
-    // Wait until 'size' number of bytes have been received.
-    size += receiving_client()->GetBytesReceivedStats(local_audio_track);
-    EXPECT_TRUE_WAIT(
-        receiving_client()->GetBytesReceivedStats(local_audio_track) > size,
-        kMaxWaitForAudioDataMs);
-  }
-
   SignalingClass* initializing_client() { return initiating_client_.get(); }
   SignalingClass* receiving_client() { return receiving_client_.get(); }
 
  private:
+  rtc::scoped_ptr<rtc::PhysicalSocketServer> pss_;
+  rtc::scoped_ptr<rtc::VirtualSocketServer> ss_;
+  rtc::SocketServerScope ss_scope_;
   rtc::scoped_ptr<SignalingClass> initiating_client_;
   rtc::scoped_ptr<SignalingClass> receiving_client_;
 };
@@ -1155,8 +1141,7 @@ TEST_F(JsepPeerConnectionP2PTestClient, LocalP2PTestOfferDtlsButNotSdes) {
 
 // This test sets up a Jsep call between two parties, and the callee only
 // accept to receive video.
-// BUG=https://code.google.com/p/webrtc/issues/detail?id=2288
-TEST_F(JsepPeerConnectionP2PTestClient, DISABLED_LocalP2PTestAnswerVideo) {
+TEST_F(JsepPeerConnectionP2PTestClient, LocalP2PTestAnswerVideo) {
   ASSERT_TRUE(CreateTestClients());
   receiving_client()->SetReceiveAudioVideo(false, true);
   LocalP2PTest();
@@ -1164,7 +1149,7 @@ TEST_F(JsepPeerConnectionP2PTestClient, DISABLED_LocalP2PTestAnswerVideo) {
 
 // This test sets up a Jsep call between two parties, and the callee only
 // accept to receive audio.
-TEST_F(JsepPeerConnectionP2PTestClient, DISABLED_LocalP2PTestAnswerAudio) {
+TEST_F(JsepPeerConnectionP2PTestClient, LocalP2PTestAnswerAudio) {
   ASSERT_TRUE(CreateTestClients());
   receiving_client()->SetReceiveAudioVideo(true, false);
   LocalP2PTest();
@@ -1462,7 +1447,6 @@ TEST_F(JsepPeerConnectionP2PTestClient, IceRestart) {
   EXPECT_NE(receiver_candidate, receiver_candidate_restart);
 }
 
-
 // This test sets up a Jsep call between two parties with external
 // VideoDecoderFactory.
 // TODO(holmer): Disabled due to sometimes crashing on buildbots.
@@ -1472,72 +1456,6 @@ TEST_F(JsepPeerConnectionP2PTestClient,
   ASSERT_TRUE(CreateTestClients());
   EnableVideoDecoderFactory();
   LocalP2PTest();
-}
-
-// Test receive bandwidth stats with only audio enabled at receiver.
-TEST_F(JsepPeerConnectionP2PTestClient, ReceivedBweStatsAudio) {
-  ASSERT_TRUE(CreateTestClients());
-  receiving_client()->SetReceiveAudioVideo(true, false);
-  LocalP2PTest();
-
-  // Wait until we have received some audio data. Following REMB shoud be zero.
-  WaitForAudioData(10000);
-  EXPECT_EQ_WAIT(
-      receiving_client()->GetAvailableReceivedBandwidthStats(), 0,
-      kMaxWaitForRembMs);
-}
-
-// Test receive bandwidth stats with combined BWE.
-// Disabled due to https://code.google.com/p/webrtc/issues/detail?id=3871.
-TEST_F(JsepPeerConnectionP2PTestClient, DISABLED_ReceivedBweStatsCombined) {
-  FakeConstraints setup_constraints;
-  setup_constraints.AddOptional(
-      MediaConstraintsInterface::kCombinedAudioVideoBwe, true);
-  ASSERT_TRUE(CreateTestClients(&setup_constraints, &setup_constraints));
-  initializing_client()->AddMediaStream(true, true);
-  initializing_client()->AddMediaStream(false, true);
-  initializing_client()->AddMediaStream(false, true);
-  initializing_client()->AddMediaStream(false, true);
-  LocalP2PTest();
-
-  // Run until a non-zero bw is reported.
-  EXPECT_TRUE_WAIT(receiving_client()->GetAvailableReceivedBandwidthStats() > 0,
-                   kMaxWaitForRembMs);
-
-  // Halt video capturers, then run until we have gotten some audio. Following
-  // REMB should be non-zero.
-  initializing_client()->StopVideoCapturers();
-  WaitForAudioData(10000);
-  EXPECT_TRUE_WAIT(
-      receiving_client()->GetAvailableReceivedBandwidthStats() > 0,
-      kMaxWaitForRembMs);
-}
-
-// Test receive bandwidth stats with 1 video, 3 audio streams but no combined
-// BWE.
-// Disabled due to https://code.google.com/p/webrtc/issues/detail?id=3871.
-TEST_F(JsepPeerConnectionP2PTestClient, DISABLED_ReceivedBweStatsNotCombined) {
-  FakeConstraints setup_constraints;
-  setup_constraints.AddOptional(
-      MediaConstraintsInterface::kCombinedAudioVideoBwe, false);
-  ASSERT_TRUE(CreateTestClients(&setup_constraints, &setup_constraints));
-  initializing_client()->AddMediaStream(true, true);
-  initializing_client()->AddMediaStream(false, true);
-  initializing_client()->AddMediaStream(false, true);
-  initializing_client()->AddMediaStream(false, true);
-  LocalP2PTest();
-
-  // Run until a non-zero bw is reported.
-  EXPECT_TRUE_WAIT(receiving_client()->GetAvailableReceivedBandwidthStats() > 0,
-                   kMaxWaitForRembMs);
-
-  // Halt video capturers, then run until we have gotten some audio. Following
-  // REMB should be zero.
-  initializing_client()->StopVideoCapturers();
-  WaitForAudioData(10000);
-  EXPECT_EQ_WAIT(
-      receiving_client()->GetAvailableReceivedBandwidthStats(), 0,
-      kMaxWaitForRembMs);
 }
 
 #endif // if !defined(THREAD_SANITIZER)

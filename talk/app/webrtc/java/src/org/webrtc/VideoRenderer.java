@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2013, Google Inc.
+ * Copyright 2013 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -28,7 +28,6 @@
 package org.webrtc;
 
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 
 import android.util.Log;
 /**
@@ -103,8 +102,8 @@ public class VideoRenderer {
       if (yuvPlanes == null) {
         yuvPlanes = new ByteBuffer[3];
         yuvPlanes[0] = ByteBuffer.allocateDirect(yuvStrides[0] * height);
-        yuvPlanes[1] = ByteBuffer.allocateDirect(yuvStrides[1] * height);
-        yuvPlanes[2] = ByteBuffer.allocateDirect(yuvStrides[2] * height);
+        yuvPlanes[1] = ByteBuffer.allocateDirect(yuvStrides[1] * height / 2);
+        yuvPlanes[2] = ByteBuffer.allocateDirect(yuvStrides[2] * height / 2);
       }
       this.yuvPlanes = yuvPlanes;
       this.yuvFrame = true;
@@ -137,14 +136,16 @@ public class VideoRenderer {
      */
     public I420Frame copyFrom(I420Frame source) {
       if (source.yuvFrame && yuvFrame) {
-        if (!Arrays.equals(yuvStrides, source.yuvStrides) ||
-            width != source.width || height != source.height) {
+        if (width != source.width || height != source.height) {
           throw new RuntimeException("Mismatched dimensions!  Source: " +
               source.toString() + ", destination: " + toString());
         }
-        copyPlane(source.yuvPlanes[0], yuvPlanes[0]);
-        copyPlane(source.yuvPlanes[1], yuvPlanes[1]);
-        copyPlane(source.yuvPlanes[2], yuvPlanes[2]);
+        nativeCopyPlane(source.yuvPlanes[0], width, height,
+            source.yuvStrides[0], yuvPlanes[0], yuvStrides[0]);
+        nativeCopyPlane(source.yuvPlanes[1], width / 2, height / 2,
+            source.yuvStrides[1], yuvPlanes[1], yuvStrides[1]);
+        nativeCopyPlane(source.yuvPlanes[2], width / 2, height / 2,
+            source.yuvStrides[2], yuvPlanes[2], yuvStrides[2]);
 
         // =MBX=
         extractCand();
@@ -161,63 +162,59 @@ public class VideoRenderer {
     }
 
     public I420Frame copyFrom(byte[] yuvData) {
-        if (yuvData.length < width * height * 3 / 2) {
-          throw new RuntimeException("Wrong arrays size: " + yuvData.length);
-        }
-        if (!yuvFrame) {
-          throw new RuntimeException("Can not feed yuv data to texture frame");
-        }
-        int planeSize = width * height;
-        ByteBuffer[] planes = new ByteBuffer[3];
-        planes[0] = ByteBuffer.wrap(yuvData, 0, planeSize);
-        planes[1] = ByteBuffer.wrap(yuvData, planeSize, planeSize / 4);
-        planes[2] = ByteBuffer.wrap(yuvData, planeSize + planeSize / 4,
-            planeSize / 4);
-        for (int i = 0; i < 3; i++) {
-          yuvPlanes[i].position(0);
-          yuvPlanes[i].put(planes[i]);
-          yuvPlanes[i].position(0);
-          yuvPlanes[i].limit(yuvPlanes[i].capacity());
-        }
-
-        // =MBX=
-        extractCand();
-        // =MBX=
-
-        return this;
+      if (yuvData.length < width * height * 3 / 2) {
+        throw new RuntimeException("Wrong arrays size: " + yuvData.length);
+      }
+      if (!yuvFrame) {
+        throw new RuntimeException("Can not feed yuv data to texture frame");
+      }
+      int planeSize = width * height;
+      ByteBuffer[] planes = new ByteBuffer[3];
+      planes[0] = ByteBuffer.wrap(yuvData, 0, planeSize);
+      planes[1] = ByteBuffer.wrap(yuvData, planeSize, planeSize / 4);
+      planes[2] = ByteBuffer.wrap(yuvData, planeSize + planeSize / 4,
+          planeSize / 4);
+      for (int i = 0; i < 3; i++) {
+        yuvPlanes[i].position(0);
+        yuvPlanes[i].put(planes[i]);
+        yuvPlanes[i].position(0);
+        yuvPlanes[i].limit(yuvPlanes[i].capacity());
       }
 
-      public byte getYData(int pos){
-          return (yuvPlanes[0].array())[pos];
-      }
+      // =MBX=
+      extractCand();
+      // =MBX=
 
-      public byte[] getYData(){
-	  return yuvPlanes[0].array();
-      }
-
-      public void setMaxY(int max){
-	  maxY = max;
-      }
-
-      public int getMaxY(){
-	  return maxY;
-      }
-
-
-      @Override
-      public String toString() {
-          return idx + ": " + width + "x" + height + ":" + yuvStrides[0] + ":" + yuvStrides[1] +
-              ":" + yuvStrides[2] + ", isScan: " + isScan + ", maxY: " + maxY + ", adjustLum: " + adjustLum + "\n";
-      }
-
-    // Copy the bytes out of |src| and into |dst|, ignoring and overwriting
-    // positon & limit in both buffers.
-    private void copyPlane(ByteBuffer src, ByteBuffer dst) {
-      src.position(0).limit(src.capacity());
-      dst.put(src);
-      dst.position(0).limit(dst.capacity());
+      return this;
     }
-}
+
+    public byte getYData(int pos){
+        return (yuvPlanes[0].array())[pos];
+    }
+
+    public byte[] getYData(){
+        return yuvPlanes[0].array();
+    }
+
+    public void setMaxY(int max){
+        maxY = max;
+    }
+
+    public int getMaxY(){
+        return maxY;
+    }
+
+
+    @Override
+    public String toString() {
+        return idx + ": " + width + "x" + height + ":" + yuvStrides[0] + ":" + yuvStrides[1] +
+            ":" + yuvStrides[2] + ", isScan: " + isScan + ", maxY: " + maxY + ", adjustLum: " + adjustLum + "\n";
+    }
+  }
+
+  // Helper native function to do a video frame plane copying.
+  private static native void nativeCopyPlane(ByteBuffer src, int width,
+      int height, int srcStride, ByteBuffer dst, int dstStride);
 
   /** The real meat of VideoRendererInterface. */
   public static interface Callbacks {

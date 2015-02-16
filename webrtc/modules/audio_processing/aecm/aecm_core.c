@@ -14,10 +14,10 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#include "webrtc/common_audio/ring_buffer.h"
 #include "webrtc/common_audio/signal_processing/include/real_fft.h"
 #include "webrtc/modules/audio_processing/aecm/include/echo_control_mobile.h"
 #include "webrtc/modules/audio_processing/utility/delay_estimator_wrapper.h"
-#include "webrtc/modules/audio_processing/utility/ring_buffer.h"
 #include "webrtc/system_wrappers/interface/compile_assert_c.h"
 #include "webrtc/system_wrappers/interface/cpu_features_wrapper.h"
 #include "webrtc/typedefs.h"
@@ -880,7 +880,7 @@ int16_t WebRtcAecm_CalcStepSize(AecmCore* const aecm) {
         } else
         {
             tmp16 = (aecm->farLogEnergy - aecm->farEnergyMin);
-            tmp32 = WEBRTC_SPL_MUL_16_16(tmp16, MU_DIFF);
+            tmp32 = tmp16 * MU_DIFF;
             tmp32 = WebRtcSpl_DivW32W16(tmp32, aecm->farEnergyMaxMin);
             mu = MU_MIN - 1 - (int16_t)(tmp32);
             // The -1 is an alternative to rounding. This way we get a larger
@@ -1146,14 +1146,13 @@ int16_t WebRtcAecm_CalcSuppressionGain(AecmCore* const aecm) {
             // Update counters
             if (dE < SUPGAIN_EPC_DT)
             {
-                tmp32no1 = WEBRTC_SPL_MUL_16_16(aecm->supGainErrParamDiffAB, dE);
+                tmp32no1 = aecm->supGainErrParamDiffAB * dE;
                 tmp32no1 += (SUPGAIN_EPC_DT >> 1);
                 tmp16no1 = (int16_t)WebRtcSpl_DivW32W16(tmp32no1, SUPGAIN_EPC_DT);
                 supGain = aecm->supGainErrParamA - tmp16no1;
             } else
             {
-                tmp32no1 = WEBRTC_SPL_MUL_16_16(aecm->supGainErrParamDiffBD,
-                                                (ENERGY_DEV_TOL - dE));
+                tmp32no1 = aecm->supGainErrParamDiffBD * (ENERGY_DEV_TOL - dE);
                 tmp32no1 += ((ENERGY_DEV_TOL - SUPGAIN_EPC_DT) >> 1);
                 tmp16no1 = (int16_t)WebRtcSpl_DivW32W16(tmp32no1, (ENERGY_DEV_TOL
                         - SUPGAIN_EPC_DT));

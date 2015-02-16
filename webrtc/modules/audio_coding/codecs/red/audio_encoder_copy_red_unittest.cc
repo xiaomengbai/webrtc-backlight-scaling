@@ -9,6 +9,7 @@
  */
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "webrtc/base/checks.h"
 #include "webrtc/modules/audio_coding/codecs/red/audio_encoder_copy_red.h"
 #include "webrtc/modules/audio_coding/codecs/mock/mock_audio_encoder.h"
 #include "webrtc/system_wrappers/interface/scoped_ptr.h"
@@ -119,6 +120,16 @@ TEST_F(AudioEncoderCopyRedTest, CheckFrameSizePropagation) {
 TEST_F(AudioEncoderCopyRedTest, CheckMaxFrameSizePropagation) {
   EXPECT_CALL(mock_encoder_, Max10MsFramesInAPacket()).WillOnce(Return(17));
   EXPECT_EQ(17, red_->Max10MsFramesInAPacket());
+}
+
+TEST_F(AudioEncoderCopyRedTest, CheckSetBitratePropagation) {
+  EXPECT_CALL(mock_encoder_, SetTargetBitrate(4711));
+  red_->SetTargetBitrate(4711);
+}
+
+TEST_F(AudioEncoderCopyRedTest, CheckProjectedPacketLossRatePropagation) {
+  EXPECT_CALL(mock_encoder_, SetProjectedPacketLossRate(0.5));
+  red_->SetProjectedPacketLossRate(0.5);
 }
 
 // Checks that the an Encode() call is immediately propagated to the speech

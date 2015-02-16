@@ -39,8 +39,7 @@ ViERenderer::~ViERenderer(void) {
   if (render_callback_)
     render_module_.DeleteIncomingRenderStream(render_id_);
 
-  if (incoming_external_callback_)
-    delete incoming_external_callback_;
+  delete incoming_external_callback_;
 }
 
 int32_t ViERenderer::StartRender() {
@@ -170,9 +169,25 @@ int ViEExternalRendererImpl::SetViEExternalRenderer(
   return 0;
 }
 
-int32_t ViEExternalRendererImpl::RenderFrame(
-    const uint32_t stream_id,
-    I420VideoFrame&   video_frame) {
+int32_t ViEExternalRendererImpl::RenderFrame(const uint32_t stream_id,
+                                             I420VideoFrame& video_frame) {
+  if (external_renderer_format_ != kVideoI420)
+    return ConvertAndRenderFrame(stream_id, video_frame);
+
+  // Fast path for I420 without frame copy.
+  NotifyFrameSizeChange(stream_id, video_frame);
+  if (video_frame.native_handle() == NULL ||
+      external_renderer_->IsTextureSupported()) {
+    external_renderer_->DeliverI420Frame(video_frame);
+  } else {
+    // TODO(wuchengli): readback the pixels and deliver the frame.
+  }
+  return 0;
+}
+
+int32_t ViEExternalRendererImpl::ConvertAndRenderFrame(
+    uint32_t stream_id,
+    I420VideoFrame& video_frame) {
   if (video_frame.native_handle() != NULL) {
     NotifyFrameSizeChange(stream_id, video_frame);
 
@@ -204,16 +219,6 @@ int32_t ViEExternalRendererImpl::RenderFrame(
   converted_frame_->VerifyAndAllocate(buffer_size);
 
   switch (external_renderer_format_) {
-    case kVideoI420: {
-      // TODO(mikhal): need to copy the buffer as is.
-      // can the output here be a I420 frame?
-      int length = ExtractBuffer(video_frame, out_frame->Size(),
-                                 out_frame->Buffer());
-      if (length < 0)
-        return -1;
-      out_frame->SetLength(length);
-      break;
-    }
     case kVideoYV12:
     case kVideoYUY2:
     case kVideoUYVY:

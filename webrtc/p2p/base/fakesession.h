@@ -198,6 +198,9 @@ class FakeTransportChannel : public TransportChannelImpl,
   virtual int SetOption(rtc::Socket::Option opt, int value) {
     return true;
   }
+  virtual bool GetOption(rtc::Socket::Option opt, int* value) {
+    return true;
+  }
   virtual int GetError() {
     return 0;
   }
@@ -240,6 +243,10 @@ class FakeTransportChannel : public TransportChannelImpl,
       *cipher = chosen_srtp_cipher_;
       return true;
     }
+    return false;
+  }
+
+  virtual bool GetSslCipher(std::string* cipher) {
     return false;
   }
 

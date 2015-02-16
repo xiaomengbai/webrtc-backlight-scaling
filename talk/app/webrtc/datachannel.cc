@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2012, Google Inc.
+ * Copyright 2012 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -24,6 +24,7 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #include "talk/app/webrtc/datachannel.h"
 
 #include <string>
@@ -462,11 +463,13 @@ void DataChannel::SendQueuedDataMessages() {
   ASSERT(was_ever_writable_ && state_ == kOpen);
 
   while (!queued_send_data_.Empty()) {
-    rtc::scoped_ptr<DataBuffer> buffer(queued_send_data_.Front());
+    DataBuffer* buffer = queued_send_data_.Front();
     if (!SendDataMessage(*buffer, false)) {
+      // Leave the message in the queue if sending is aborted.
       break;
     }
     queued_send_data_.Pop();
+    delete buffer;
   }
 }
 

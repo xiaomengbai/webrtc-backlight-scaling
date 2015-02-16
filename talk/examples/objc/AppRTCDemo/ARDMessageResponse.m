@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2014, Google Inc.
+ * Copyright 2014 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -25,17 +25,11 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#import "ARDMessageResponse.h"
+#import "ARDMessageResponse+Internal.h"
 
 #import "ARDUtilities.h"
 
 static NSString const *kARDMessageResultKey = @"result";
-
-@interface ARDMessageResponse ()
-
-@property(nonatomic, assign) ARDMessageResultType result;
-
-@end
 
 @implementation ARDMessageResponse
 

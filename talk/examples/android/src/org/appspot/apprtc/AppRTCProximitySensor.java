@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2014, Google Inc.
+ * Copyright 2014 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -27,15 +27,16 @@
 
 package org.appspot.apprtc;
 
+import org.appspot.apprtc.util.AppRTCUtils;
+import org.appspot.apprtc.util.AppRTCUtils.NonThreadSafe;
+
 import android.content.Context;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.os.Build;
 import android.util.Log;
-import java.util.List;
-import org.appspot.apprtc.util.AppRTCUtils;
-import org.appspot.apprtc.util.AppRTCUtils.NonThreadSafe;
 
 /**
  * AppRTCProximitySensor manages functions related to the proximity sensor in
@@ -54,11 +55,9 @@ public class AppRTCProximitySensor implements SensorEventListener {
   // the case. Only active when |DEBUG| is set to true.
   private final NonThreadSafe nonThreadSafe = new AppRTCUtils.NonThreadSafe();
 
-  private final Context apprtcContext;
   private final Runnable onSensorStateListener;
   private final SensorManager sensorManager;
   private Sensor proximitySensor = null;
-  private boolean initialized = false;
   private boolean lastStateReportIsNear = false;
 
   /** Construction */
@@ -69,7 +68,6 @@ public class AppRTCProximitySensor implements SensorEventListener {
 
   private AppRTCProximitySensor(Context context, Runnable sensorStateListener) {
     Log.d(TAG, "AppRTCProximitySensor" + AppRTCUtils.getThreadInfo());
-    apprtcContext = context;
     onSensorStateListener = sensorStateListener;
     sensorManager = ((SensorManager) context.getSystemService(
         Context.SENSOR_SERVICE));
@@ -161,20 +159,30 @@ public class AppRTCProximitySensor implements SensorEventListener {
 
   /** Helper method for logging information about the proximity sensor. */
   private void logProximitySensorInfo() {
-    if (proximitySensor == null)
+    if (proximitySensor == null) {
       return;
-    /*
-    Log.d(TAG, "Proximity sensor: " + "name=" + proximitySensor.getName()
-        + ", vendor: " + proximitySensor.getVendor()
-        + ", type: " + proximitySensor.getStringType()
-        + ", reporting mode: " + proximitySensor.getReportingMode()
-        + ", power: " + proximitySensor.getPower()
-        + ", min delay: " + proximitySensor.getMinDelay()
-        + ", max delay: " + proximitySensor.getMaxDelay()
-        + ", resolution: " + proximitySensor.getResolution()
-        + ", max range: " + proximitySensor.getMaximumRange()
-        + ", isWakeUpSensor: " + proximitySensor.isWakeUpSensor());
-    */
+    }
+    StringBuilder info = new StringBuilder("Proximity sensor: ");
+    info.append("name=" + proximitySensor.getName());
+    info.append(", vendor: " + proximitySensor.getVendor());
+    info.append(", power: " + proximitySensor.getPower());
+    info.append(", resolution: " + proximitySensor.getResolution());
+    info.append(", max range: " + proximitySensor.getMaximumRange());
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.GINGERBREAD) {
+      // Added in API level 9.
+      info.append(", min delay: " + proximitySensor.getMinDelay());
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+      // Added in API level 20.
+      info.append(", type: " + proximitySensor.getStringType());
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      // Added in API level 21.
+      info.append(", max delay: " + proximitySensor.getMaxDelay());
+      info.append(", reporting mode: " + proximitySensor.getReportingMode());
+      info.append(", isWakeUpSensor: " + proximitySensor.isWakeUpSensor());
+    }
+    Log.d(TAG, info.toString());
   }
 
   /**

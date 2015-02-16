@@ -71,6 +71,12 @@ public:
       return 0;
     }
 
+    virtual int DeliverI420Frame(const webrtc::I420VideoFrame& webrtc_frame) {
+      EXPECT_EQ(webrtc_frame.width(), _width);
+      EXPECT_EQ(webrtc_frame.height(), _height);
+      return 0;
+    }
+
     virtual bool IsTextureSupported() { return false; }
 
 public:

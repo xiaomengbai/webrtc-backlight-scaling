@@ -664,7 +664,6 @@ VideoRenderNSOpenGL::~VideoRenderNSOpenGL()
 
     if (tmpPtr)
     {
-        tmpPtr->SetNotAlive();
         _screenUpdateEvent->Set();
         _screenUpdateEvent->StopTimer();
 
@@ -873,7 +872,6 @@ int VideoRenderNSOpenGL::StopThread()
 
     if (tmpPtr)
     {
-        tmpPtr->SetNotAlive();
         _screenUpdateEvent->Set();
         if (tmpPtr->Stop())
         {
@@ -1174,14 +1172,6 @@ int VideoRenderNSOpenGL::GetWindowRect(Rect& rect)
     {
         return -1;
     }
-}
-
-int32_t VideoRenderNSOpenGL::ChangeUniqueID(int32_t id)
-{
-
-    CriticalSectionScoped cs(&_nsglContextCritSec);
-    _id = id;
-    return 0;
 }
 
 int32_t VideoRenderNSOpenGL::SetText(const uint8_t /*textId*/,

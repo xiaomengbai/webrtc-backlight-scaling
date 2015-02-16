@@ -1,6 +1,6 @@
 /*
  * libjingle
- * Copyright 2012, Google Inc.
+ * Copyright 2012 Google Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -126,7 +126,7 @@ class MockStatsObserver : public webrtc::StatsObserver {
     memset(&stats_, sizeof(stats_), 0);
     stats_.number_of_reports = reports.size();
     for (const auto* r : reports) {
-      if (r->type == StatsReport::kStatsReportTypeSsrc) {
+      if (r->type() == StatsReport::kStatsReportTypeSsrc) {
         GetIntValue(r, StatsReport::kStatsValueNameAudioOutputLevel,
             &stats_.audio_output_level);
         GetIntValue(r, StatsReport::kStatsValueNameAudioInputLevel,
@@ -135,7 +135,7 @@ class MockStatsObserver : public webrtc::StatsObserver {
             &stats_.bytes_received);
         GetIntValue(r, StatsReport::kStatsValueNameBytesSent,
             &stats_.bytes_sent);
-      } else if (r->type == StatsReport::kStatsReportTypeBwe) {
+      } else if (r->type() == StatsReport::kStatsReportTypeBwe) {
         GetIntValue(r, StatsReport::kStatsValueNameAvailableReceiveBandwidth,
             &stats_.available_receive_bandwidth);
       }
@@ -174,9 +174,9 @@ class MockStatsObserver : public webrtc::StatsObserver {
   bool GetIntValue(const StatsReport* report,
                    StatsReport::StatsValueName name,
                    int* value) {
-    for (const auto& v : report->values) {
-      if (v.name == name) {
-        *value = rtc::FromString<int>(v.value);
+    for (const auto& v : report->values()) {
+      if (v->name == name) {
+        *value = rtc::FromString<int>(v->value);
         return true;
       }
     }

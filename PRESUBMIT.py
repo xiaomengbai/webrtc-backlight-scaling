@@ -123,6 +123,31 @@ def _CheckNoRtcBaseDeps(input_api, gyp_files, output_api):
         items=violating_files)]
   return []
 
+def _CheckNoSourcesAboveGyp(input_api, gyp_files, output_api):
+  # Disallow referencing source files with paths above the GYP file location.
+  source_pattern = input_api.re.compile(r'sources.*?\[(.*?)\]',
+                                        re.MULTILINE | re.DOTALL)
+  file_pattern = input_api.re.compile(r"'((\.\./.*?)|(<\(webrtc_root\).*?))'")
+  violating_gyp_files = set()
+  violating_source_entries = []
+  for gyp_file in gyp_files:
+    contents = input_api.ReadFile(gyp_file)
+    for source_block_match in source_pattern.finditer(contents):
+      # Find all source list entries starting with ../ in the source block.
+      for file_list_match in file_pattern.finditer(source_block_match.group(0)):
+        violating_source_entries.append(file_list_match.group(0))
+        violating_gyp_files.add(gyp_file)
+  if violating_gyp_files:
+    return [output_api.PresubmitError(
+        'Referencing source files above the directory of the GYP file is not '
+        'allowed. Please introduce new GYP targets and/or GYP files in the '
+        'proper location instead.\n'
+        'Invalid source entries:\n'
+        '%s\n'
+        'Violating GYP files:' % '\n'.join(violating_source_entries),
+        items=violating_gyp_files)]
+  return []
+
 def _CheckGypChanges(input_api, output_api):
   source_file_filter = lambda x: input_api.FilterSourceFile(
       x, white_list=(r'.+\.(gyp|gypi)$',))
@@ -139,6 +164,7 @@ def _CheckGypChanges(input_api, output_api):
         'BUILD.gn files are also updated.\nChanged GYP files:',
         items=gyp_files))
     result.extend(_CheckNoRtcBaseDeps(input_api, gyp_files, output_api))
+    result.extend(_CheckNoSourcesAboveGyp(input_api, gyp_files, output_api))
   return result
 
 def _CheckUnwantedDependencies(input_api, output_api):
@@ -317,25 +343,33 @@ def GetPreferredTryMasters(project, change):
       'linux_rel',
       'linux_tsan2',
   ] + linux_gn_bots
+  mac_gn_bots = [
+      'mac_x64_gn',
+      'mac_x64_gn_rel',
+  ]
   mac_bots = [
       'mac',
       'mac_asan',
       'mac_baremetal',
       'mac_rel',
       'mac_x64_rel',
+  ] + mac_gn_bots
+  win_gn_bots = [
+      'win_x64_gn',
+      'win_x64_gn_rel',
   ]
   win_bots = [
       'win',
-      'win_asan',
       'win_baremetal',
       'win_drmemory_light',
       'win_rel',
       'win_x64_rel',
-  ]
+  ] + win_gn_bots
   if not files or all(re.search(r'[\\/]OWNERS$', f) for f in files):
     return {}
   if all(re.search(r'[\\/]BUILD.gn$', f) for f in files):
-    return GetDefaultTryConfigs(android_gn_bots + linux_gn_bots)
+    return GetDefaultTryConfigs(android_gn_bots + linux_gn_bots + mac_gn_bots +
+                                win_gn_bots)
   if all(re.search('\.(m|mm)$|(^|[/_])mac[/_.]', f) for f in files):
     return GetDefaultTryConfigs(mac_bots)
   if all(re.search('(^|[/_])win[/_.]', f) for f in files):

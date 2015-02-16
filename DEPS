@@ -6,7 +6,7 @@
 vars = {
   'extra_gyp_flag': '-Dextra_gyp_flag=0',
   'chromium_git': 'https://chromium.googlesource.com',
-  'chromium_revision': '8e72e1d6c13fa6a4cf2859ac6e209be4546bb50d',
+  'chromium_revision': '601e6f32704fed600914fd5198c24395c4dc36f5',
 }
 
 # NOTE: Prefer revision numbers to tags for svn deps. Use http rather than
@@ -24,7 +24,7 @@ deps = {
 deps_os = {
   'win': {
     'src/third_party/winsdk_samples/src':
-      Var('chromium_git') + '/external/webrtc/deps/third_party/winsdk_samples_v71@373e927dc5ffdb61b9fb63da3d261e71f8d50dc8', # from svn revision 3145
+      Var('chromium_git') + '/external/webrtc/deps/third_party/winsdk_samples_v71@c0cbedd854cb610a53226d9817416c4ab9a7d1e9', # from svn revision 7951
   },
 }
 
@@ -35,6 +35,7 @@ include_rules = [
   '-base',
   '-chromium',
   '+gflags',
+  '+libyuv',
   '+net',
   '+talk',
   '+testing',

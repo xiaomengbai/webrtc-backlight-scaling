@@ -9,19 +9,12 @@
 import("//build/config/android/config.gni")
 import("../build/webrtc.gni")
 
-config("system_wrappers_inherited_config") {
-  include_dirs = [
-    "interface",
-  ]
-}
-
 static_library("system_wrappers") {
   sources = [
     "interface/aligned_array.h",
     "interface/aligned_malloc.h",
     "interface/atomic32.h",
     "interface/clock.h",
-    "interface/compile_assert.h",
     "interface/condition_variable_wrapper.h",
     "interface/cpu_info.h",
     "interface/cpu_features_wrapper.h",
@@ -117,7 +110,6 @@ static_library("system_wrappers") {
 
   public_configs = [
     "..:common_inherited_config",
-    ":system_wrappers_inherited_config",
   ]
 
   if (rtc_enable_data_logging) {
@@ -189,10 +181,6 @@ static_library("system_wrappers") {
     ]
   }
 
-  include_dirs = [
-    "source/spreadsortlib",
-  ]
-
   deps += [
     "../base:rtc_base_approved",
   ]
@@ -200,6 +188,7 @@ static_library("system_wrappers") {
 
 source_set("field_trial_default") {
   sources = [
+    "interface/field_trial_default.h",
     "source/field_trial_default.cc",
   ]
 

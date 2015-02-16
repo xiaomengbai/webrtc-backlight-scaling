@@ -16,6 +16,7 @@
 #include <map>
 #include <string>
 
+#include "webrtc/base/arraysize.h"
 #include "webrtc/common_types.h"
 #include "webrtc/examples/android/media_demo/jni/jni_helpers.h"
 #include "webrtc/examples/android/media_demo/jni/media_codec_video_decoder.h"
@@ -114,7 +115,7 @@ class VideoDecodeEncodeObserver : public webrtc::ViEDecoderObserver,
     jmethodID j_codec_ctor = GetMethodID(jni, j_codec_class, "<init>", "(J)V");
     jobject j_codec =
         jni->NewObject(j_codec_class, j_codec_ctor, jlongFromPointer(codec));
-    CHECK_EXCEPTION(jni, "error during NewObject");
+    CHECK_JNI_EXCEPTION(jni, "error during NewObject");
     jni->CallVoidMethod(j_observer_, incoming_codec_changed_, video_channel,
                         j_codec);
   }
@@ -330,7 +331,7 @@ void SetVieDeviceObjects(JavaVM* vm) {
   webrtc::AttachThreadScoped ats(g_vm);
   JNIEnv* jni = ats.env();
   g_class_reference_holder = new ClassReferenceHolder(
-      jni, g_classes, ARRAYSIZE(g_classes));
+      jni, g_classes, arraysize(g_classes));
 }
 
 void ClearVieDeviceObjects() {
@@ -455,7 +456,7 @@ JOWW(jobject, VideoEngine_getCodec)(JNIEnv* jni, jobject j_vie, jint index) {
   jmethodID j_codec_ctor = GetMethodID(jni, j_codec_class, "<init>", "(J)V");
   jobject j_codec =
       jni->NewObject(j_codec_class, j_codec_ctor, jlongFromPointer(codec));
-  CHECK_EXCEPTION(jni, "error during NewObject");
+  CHECK_JNI_EXCEPTION(jni, "error during NewObject");
   return j_codec;
 }
 
@@ -514,7 +515,7 @@ JOWW(jobject,
   jmethodID j_camera_ctor = GetMethodID(jni, j_camera_class, "<init>", "(J)V");
   jobject j_camera = jni->NewObject(j_camera_class, j_camera_ctor,
                                     jlongFromPointer(camera_info));
-  CHECK_EXCEPTION(jni, "error during NewObject");
+  CHECK_JNI_EXCEPTION(jni, "error during NewObject");
   return j_camera;
 }
 
@@ -559,7 +560,7 @@ JOWW(jint, VideoEngine_getOrientation)(JNIEnv* jni, jobject j_vie,
                                        jobject j_camera) {
   VideoEngineData* vie_data = GetVideoEngineData(jni, j_vie);
   CameraDesc* camera_info = GetCameraDesc(jni, j_camera);
-  webrtc::RotateCapturedFrame orientation;
+  webrtc::VideoRotation orientation;
   if (vie_data->capture->GetOrientation(camera_info->unique_id, orientation) !=
       0) {
     return -1;
@@ -567,11 +568,13 @@ JOWW(jint, VideoEngine_getOrientation)(JNIEnv* jni, jobject j_vie,
   return static_cast<jint>(orientation);
 }
 
-JOWW(jint, VideoEngine_setRotateCapturedFrames)(JNIEnv* jni, jobject j_vie,
-                                                jint capture_id, jint degrees) {
+JOWW(jint, VideoEngine_setVideoRotations)(JNIEnv* jni,
+                                          jobject j_vie,
+                                          jint capture_id,
+                                          jint degrees) {
   VideoEngineData* vie_data = GetVideoEngineData(jni, j_vie);
-  return vie_data->capture->SetRotateCapturedFrames(
-      capture_id, static_cast<webrtc::RotateCapturedFrame>(degrees));
+  return vie_data->capture->SetVideoRotation(
+      capture_id, static_cast<webrtc::VideoRotation>(degrees));
 }
 
 JOWW(jint, VideoEngine_setNackStatus)(JNIEnv* jni, jobject j_vie, jint channel,
@@ -594,7 +597,7 @@ JOWW(jobject, VideoEngine_getReceivedRtcpStatistics)(JNIEnv* jni, jobject j_vie,
   unsigned int cumulative_lost;  // NOLINT
   unsigned int extended_max;     // NOLINT
   unsigned int jitter;           // NOLINT
-  int rtt_ms;
+  int64_t rtt_ms;
   VideoEngineData* vie_data = GetVideoEngineData(jni, j_vie);
   if (vie_data->rtp->GetReceivedRTCPStatistics(channel, fraction_lost,
                                                cumulative_lost, extended_max,
@@ -608,8 +611,8 @@ JOWW(jobject, VideoEngine_getReceivedRtcpStatistics)(JNIEnv* jni, jobject j_vie,
   jobject j_rtcp_statistics =
       jni->NewObject(j_rtcp_statistics_class, j_rtcp_statistics_ctor,
                      fraction_lost, cumulative_lost, extended_max, jitter,
-                     rtt_ms);
-  CHECK_EXCEPTION(jni, "error during NewObject");
+                     static_cast<int>(rtt_ms));
+  CHECK_JNI_EXCEPTION(jni, "error during NewObject");
   return j_rtcp_statistics;
 }
 

@@ -68,7 +68,6 @@ char kTSanDefaultSuppressions[] =
 // https://code.google.com/p/webrtc/issues/detail?id=3509
 "deadlock:webrtc::ProcessThreadImpl::RegisterModule\n"
 "deadlock:webrtc::RTCPReceiver::SetSsrcs\n"
-"deadlock:webrtc::RTPSenderAudio::RegisterAudioPayload\n"
 "deadlock:webrtc::test::UdpSocketManagerPosixImpl::RemoveSocket\n"
 "deadlock:webrtc::vcm::VideoReceiver::RegisterPacketRequestCallback\n"
 "deadlock:webrtc::ViECaptureImpl::ConnectCaptureDevice\n"
@@ -76,6 +75,10 @@ char kTSanDefaultSuppressions[] =
 "deadlock:webrtc::ViECodecImpl::GetSendSideDelay\n"
 "deadlock:webrtc::ViEEncoder::OnLocalSsrcChanged\n"
 "deadlock:webrtc::ViESender::RegisterSendTransport\n"
+
+// TODO(pbos): Trace events are racy due to lack of proper POD atomics.
+// https://code.google.com/p/webrtc/issues/detail?id=2497
+"race:*trace_event_unique_catstatic*\n"
 
 // End of suppressions.
 ;  // Please keep this semicolon.

@@ -18,6 +18,8 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "webrtc/base/checks.h"
+
 namespace webrtc {
 
 const long int E6 = 1000000;
@@ -90,15 +92,6 @@ EventPosix::~EventPosix() {
   pthread_mutex_destroy(&mutex_);
 }
 
-bool EventPosix::Reset() {
-  if (0 != pthread_mutex_lock(&mutex_)) {
-    return false;
-  }
-  state_ = kDown;
-  pthread_mutex_unlock(&mutex_);
-  return true;
-}
-
 bool EventPosix::Set() {
   if (0 != pthread_mutex_lock(&mutex_)) {
     return false;
@@ -146,7 +139,13 @@ EventTypeWrapper EventPosix::Wait(unsigned long timeout) {
     }
   }
 
-  state_ = kDown;
+  // Be careful to only change the state if we're about to report that the
+  // event was signaled.
+  if (ret_val == 0) {
+    // state_ might already be kDown, in case of multiple waiters. That's OK.
+    state_ = kDown;
+  }
+
   pthread_mutex_unlock(&mutex_);
 
   switch (ret_val) {
@@ -266,9 +265,6 @@ bool EventPosix::Process() {
 }
 
 bool EventPosix::StopTimer() {
-  if (timer_thread_) {
-    timer_thread_->SetNotAlive();
-  }
   if (timer_event_) {
     timer_event_->Set();
   }

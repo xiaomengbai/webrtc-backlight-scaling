@@ -74,6 +74,7 @@ static long socket_ctrl(BIO* h, int cmd, long arg1, void* arg2);
 static int socket_new(BIO* h);
 static int socket_free(BIO* data);
 
+// TODO(davidben): This should be const once BoringSSL is assumed.
 static BIO_METHOD methods_socket = {
   BIO_TYPE_BIO,
   "socket",

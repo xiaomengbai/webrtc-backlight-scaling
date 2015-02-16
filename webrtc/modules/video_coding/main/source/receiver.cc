@@ -49,7 +49,6 @@ void VCMReceiver::Reset() {
   } else {
     jitter_buffer_.Flush();
   }
-  render_wait_event_->Reset();
   state_ = kReceiving;
 }
 
@@ -59,7 +58,7 @@ int32_t VCMReceiver::Initialize() {
   return VCM_OK;
 }
 
-void VCMReceiver::UpdateRtt(uint32_t rtt) {
+void VCMReceiver::UpdateRtt(int64_t rtt) {
   jitter_buffer_.UpdateRtt(rtt);
 }
 
@@ -191,8 +190,8 @@ uint32_t VCMReceiver::DiscardedPackets() const {
 }
 
 void VCMReceiver::SetNackMode(VCMNackMode nackMode,
-                              int low_rtt_nack_threshold_ms,
-                              int high_rtt_nack_threshold_ms) {
+                              int64_t low_rtt_nack_threshold_ms,
+                              int64_t high_rtt_nack_threshold_ms) {
   CriticalSectionScoped cs(crit_sect_);
   // Default to always having NACK enabled in hybrid mode.
   jitter_buffer_.SetNackMode(nackMode, low_rtt_nack_threshold_ms,
