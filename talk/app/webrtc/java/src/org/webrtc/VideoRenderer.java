@@ -82,6 +82,13 @@ public class VideoRenderer {
 
     }
 
+    // public void setTargetLum(byte lum0, byte lum2, byte lum5, byte lum10){
+    //     yuvPlanes[0].put(0, lum0);
+    //     yuvPlanes[0].put(1, lum2);
+    //     yuvPlanes[0].put(2, lum5);
+    //     yuvPlanes[0].put(3, lum10);
+    // }
+
     public int getMaxLum(int level){
       int maxLum = 0;
       for(int i = 0; i < MAX_LUM_CAND_NR; i++)

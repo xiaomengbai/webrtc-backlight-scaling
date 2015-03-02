@@ -437,21 +437,31 @@ void *Handler<D,F>::worker(void *data)
 typedef struct _frame {
   char *data;
   size_t size;
+  size_t width;
+  size_t height;
 }frame_t;
 
 void write_and_delete_frame(std::ofstream &outputfile, frame_t frame)
 {
-  outputfile.write((char *)&frame.size, sizeof(frame.size));
+//  outputfile.write((char *)&frame.size, sizeof(frame.size));
+  outputfile.write((char *)&frame.width, sizeof(frame.width));
+  outputfile.write((char *)&frame.height, sizeof(frame.height));
   outputfile.write(frame.data, frame.size);
   delete [] frame.data;
 }
 
-static const char *_file_name = "/sdcard/data.bin";
+static const char *_file_name = "/sdcard/frames-sender.bin";
 static std::ofstream out_file(_file_name, std::ios::out);
 
-
+static int write_nr = 0;
+static int capture_nr = 0;
+static int record_st = 40;
+static int record_ed = record_st + 60 * 15;
 auto g = [&](frame_t fr)->void {
     write_and_delete_frame(out_file, fr);
+    write_nr++;
+    if(write_nr % 100 == 0)
+      out_file.flush();
 };
 
 Handler<frame_t, decltype(g)> _handler;
@@ -459,6 +469,8 @@ Handler<frame_t, decltype(g)> _handler;
 static frame_t alloc_and_copy_frame(const VideoFrame &vframe)
 {
   frame_t fr;
+  fr.width = vframe.GetWidth();
+  fr.height = vframe.GetHeight();
   fr.size = vframe.GetWidth() * vframe.GetHeight();
   fr.data = new char[fr.size];
   memcpy(fr.data, vframe.GetYPlane(), fr.size);
@@ -679,16 +691,30 @@ void VideoCapturer::OnFrameCaptured(VideoCapturer*,
 
   // =MBX=
   // Scan the frame
+  static bool funcEnable = false;
+  static bool recordEnable = false;
 
-  frame_t temp_frame = alloc_and_copy_frame(*(adapted_frame.get()));
-  _handler.push_task(g, temp_frame);
+  capture_nr++;
+
+  if(recordEnable){
+    if(capture_nr >= record_st && capture_nr <= record_ed && funcEnable){
+      if(capture_nr % 10 == 0){
+        // set the frame to purely dark
+        adapted_frame->SetToBlack();
+      }
+      frame_t temp_frame = alloc_and_copy_frame(*(adapted_frame.get()));
+      _handler.push_task(g, temp_frame);
+    }else if(capture_nr > record_ed){
+      out_file.close();
+    }
+  }
+
 //    frame_data_t frame;
 //    handler.push_task(g, frame);
 
 
   static size_t hist[256];
   static uint32_t index = 0;
-  static bool funcEnable = true;
   if(funcEnable){ // Clear the histogram
     memset(hist, 0, sizeof(hist));
   }

@@ -47,11 +47,21 @@ import android.util.Log;
 
 import org.webrtc.VideoRenderer.I420Frame;
 
+// MBX
 import java.util.Iterator;
-
 import java.util.Arrays;
 import java.util.ListIterator;
 import android.os.Handler;
+import java.io.FileOutputStream;
+import java.io.FileInputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.FileNotFoundException;
+import java.util.Arrays;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+// MBX
 /**
  * Efficiently renders YUV frames using the GPU for CSC.
  * Clients will want first to call setView() to pass GLSurfaceView
@@ -236,7 +246,7 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     private float[] stMatrix = new float[16];
 
 
-    private int frameNrHold = 20;
+    private int frameNrHold = 30;
     LinkedBlockingQueue<I420Frame> frameAvailableQueue;
     LinkedBlockingQueue<I420Frame> frameDPQueue;
     private frameProcess callbacks;
@@ -260,10 +270,18 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     private final static int ALG_DP = 0;
     private final static int ALG_GREEDY = 1;
     private final int algChosen = ALG_DP;
-    private static boolean funcEnable = true;
+    private static boolean funcEnable = false;
+    private static boolean recordEnable = false;
     private Double lastBacklight = 1.0;
+    private DataOutputStream outData;
+    private ExecutorService executor;
+    private final static int stRecIdx = 40 - 30;
+    private final static int edRecIdx = stRecIdx + 15 * 60 + 30;
+    private final static String RECORD_FILE_PATH = "/sdcard/frames-receiver.bin";
     {
       DP = new DynamicProgramming(0.004, sampleRate * 0.004, 0.4, 1.0);
+      executor = Executors.newSingleThreadExecutor();
+      outData = null;
     }
 
     //=MBX=
@@ -750,13 +768,57 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
 	    frameIdx++;
 	    frameIdx %= frameNrHold;
             ***/
+
+          if(recordEnable){
+            if(framesReceived == stRecIdx && funcEnable){
+              try{
+                outData = new DataOutputStream(new FileOutputStream(RECORD_FILE_PATH));
+              }catch(Exception e){
+                outData = null;
+              }
+            }
+            if(framesReceived == edRecIdx && funcEnable){
+              // Record done
+              try{
+                executor.shutdown();
+                executor.awaitTermination(10, TimeUnit.SECONDS);
+                outData.flush();
+                outData.close();
+              }catch(Exception e){
+                e.printStackTrace();
+              }
+              outData = null;
+            }
+
+            if(outData != null && funcEnable){
+              final DataOutputStream outDataDup = outData;
+              final int frameWidth = frameToRender.width;
+              final int frameHeight = frameToRender.height;
+              final int frameSize = frameToRender.width * frameToRender.height;
+              final byte[] frameData = Arrays.copyOf(frameToRender.getYData(), frameSize);
+              executor.submit(new Runnable() {
+                  @Override
+                  public void run(){
+                    try{
+                      outDataDup.writeInt(frameWidth);
+                      outDataDup.writeInt(frameHeight);
+                      outDataDup.write(frameData);
+                    }catch(Exception e){
+                      e.printStackTrace();
+                    }
+                  }
+                });
+            }
+          }
+
           frameDPQueue.offer(frameToRender);
 
           int queueSize = 1;
           if(algChosen == ALG_DP){
               queueSize = frameNrHold;
           }else{
-              queueSize = sampleRate;
+            //queueSize = sampleRate;
+              queueSize = 1;
           }
 
           if(frameDPQueue.size() < queueSize && funcEnable)
@@ -776,20 +838,22 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
                   }
               }
 
-              Log.d(TAG, "Before Dynamic/Greedy Programming("+ lastBacklight +"): " + backlights + indices);
-              if(algChosen == ALG_DP){
+              if(backlights.size() > 0){
+                Log.d(TAG, "Before Dynamic/Greedy Programming("+ lastBacklight +"): " + backlights + indices);
+                if(algChosen == ALG_DP){
                   backlights = DP.runDP(backlights, lastBacklight);
-              }else if(algChosen == ALG_GREEDY){
+                }else if(algChosen == ALG_GREEDY){
                   backlights = DP.runGreedy(backlights, lastBacklight);
-              }
-              setYScale(frameDPQueue, backlights, indices, lastBacklight);
-              if(backlights.size() > 0)
+                }
+                setYScale(frameDPQueue, backlights, indices, lastBacklight);
+                if(backlights.size() > 0)
                   lastBacklight = backlights.get(backlights.size() - 1);
 
-              Log.d(TAG, "After Dynamic/Greedy Programming("+ lastBacklight +"): " + backlights + indices);
+                Log.d(TAG, "After Dynamic/Greedy Programming("+ lastBacklight +"): " + backlights + indices);
 
-              // put the (index, backlight) to map in main Activity
-              callbacks.updateBacklight(indices, backlights);
+                // put the (index, backlight) to map in main Activity
+                callbacks.updateBacklight(indices, backlights);
+              }
           }
           rendererType = RendererType.RENDERER_YUV;
           while(frameDPQueue.size() > 0){
@@ -814,161 +878,161 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     }
 
       // MBX
-      static void setYScale(LinkedBlockingQueue<I420Frame> frames,
-                            ArrayList<Double> backlights,
-                            ArrayList<Integer> indices,
-                            Double oldBacklight){
+    static void setYScale(LinkedBlockingQueue<I420Frame> frames,
+                          ArrayList<Double> backlights,
+                          ArrayList<Integer> indices,
+                          Double oldBacklight){
 
-          StringBuilder builder = new StringBuilder();
+      //StringBuilder builder = new StringBuilder();
 
-          int i = 0;
-          double old = oldBacklight.doubleValue();
-          Iterator<I420Frame> iterFrame = frames.iterator();
-          while(iterFrame.hasNext()){
-              I420Frame frame = iterFrame.next();
-              if(frame.idx >= indices.get(i)){
-                  old = backlights.get(i);
-                  i++;
-              }
-              frame.yScaleFactor = (float)(1.0 / old);
-              builder.append(frame.yScaleFactor + ",");
-          }
-          // Log.d(TAG, "<<<<<<<<<<<<<< indices: " + indices);
-          // Log.d(TAG, "<<<<<<<<<<<<<< backlights: " + backlights);
-          // Log.d(TAG, "<<<<<<<<<<<<<< frames: " + frames);
-          // Log.d(TAG, "<<<<<<<<<<<<<< Scale from: " + builder.toString());
+      int i = 0;
+      double old = oldBacklight.doubleValue();
+      Iterator<I420Frame> iterFrame = frames.iterator();
+      while(iterFrame.hasNext()){
+        I420Frame frame = iterFrame.next();
+        if(frame.idx >= indices.get(i)){
+          old = backlights.get(i);
+          i++;
+        }
+        frame.yScaleFactor = (float)(1.0 / old);
+        //builder.append(frame.yScaleFactor + ",");
       }
-      //MBX
-      private class DynamicProgramming {
-          /*
-           * Dynamic Programming
-           *
-           * Input a ArrayList<Double>, adjust the values due to the constraints
-           *
-           * granularity: values vary in units of this granularity.
-           * delta: values can't vary over this per time. Implicitly delta >= granularity
-           * minVal, maxVal: the bounds of values
-           *
-           */
+      // Log.d(TAG, "<<<<<<<<<<<<<< indices: " + indices);
+      // Log.d(TAG, "<<<<<<<<<<<<<< backlights: " + backlights);
+      // Log.d(TAG, "<<<<<<<<<<<<<< frames: " + frames);
+      // Log.d(TAG, "<<<<<<<<<<<<<< Scale from: " + builder.toString());
+    }
+    //MBX
+    private class DynamicProgramming {
+      /*
+       * Dynamic Programming
+       *
+       * Input a ArrayList<Double>, adjust the values due to the constraints
+       *
+       * granularity: values vary in units of this granularity.
+       * delta: values can't vary over this per time. Implicitly delta >= granularity
+       * minVal, maxVal: the bounds of values
+       *
+       */
 
-          private double granularity;
-          private double delta;
-          private double minVal;
-          private double maxVal;
+      private double granularity;
+      private double delta;
+      private double minVal;
+      private double maxVal;
 
-          private int deltaNr;
-          private int valNr;
-          private Double[][] resCache;
-          private Integer[][] choiceCache;
+      private int deltaNr;
+      private int valNr;
+      private Double[][] resCache;
+      private Integer[][] choiceCache;
 
-          private double minSum;
+      private double minSum;
 
-          public DynamicProgramming(double g, double d, double min, double max){
-              granularity = g;
-              delta = d;
-              minVal = min;
-              maxVal = max;
-              valNr = (int)Math.ceil((maxVal - minVal) / granularity) + 1;
-              deltaNr = (int)Math.floor(delta / granularity);
-          }
-
-          public DynamicProgramming(double g, double d, double min){
-              this(g, d, min, 1.0);
-          }
-
-          public DynamicProgramming(double g, double d){
-              this(g, d, 0.0, 1.0);
-          }
-
-          public ArrayList<Double> runGreedy(ArrayList<Double> vals, Double oldValue){
-
-              // filter the values less then minVal
-              ListIterator<Double> iter = vals.listIterator();
-              double old = oldValue.doubleValue();
-              while(iter.hasNext()){
-                  Double v = iter.next();
-                  double min = Math.max(minVal, old - deltaNr * granularity);
-                  double max = Math.min(maxVal, old + deltaNr * granularity);
-                  if(v <= min) v = min;
-                  else if(v >= max) v = max;
-                  else v = (int)(v / granularity) * granularity;
-                  old = v;
-                  iter.set(v);
-              }
-
-              return vals;
-          }
-
-          public ArrayList<Double> runDP(ArrayList<Double> vals, Double oldValue){
-              resCache = new Double[vals.size() + 1][valNr];
-              choiceCache = new Integer[vals.size() + 1][valNr];
-
-              int oldLvl = (int)(oldValue / granularity);
-              if(oldLvl != (oldValue / granularity))
-                  ++oldLvl;
-
-              // initialize the mediate results
-              for(Double[] sub : resCache)
-                  Arrays.fill(sub, -1.0);
-
-              for(Integer[] sub : choiceCache)
-                  Arrays.fill(sub, -1);
-
-              // filter the values less then minVal
-              ListIterator<Double> iter = vals.listIterator();
-              while(iter.hasNext()){
-                  if(iter.next() < 0.4)
-                      iter.set(0.4);
-              }
-
-
-              for(int i = 0; i < valNr; i++){
-                  if(i < oldLvl)
-                      resCache[0][i] = -1.0;
-                  else
-                      resCache[0][i] = granularity * i + minVal;
-              }
-
-              for(int i = 1; i < vals.size() + 1; i++){
-                  for(int j = 0; j < valNr; j++){
-                      double cand = j * granularity + minVal;
-                      if(cand < vals.get(i-1))
-                          continue;
-                      int st = Math.max((j - deltaNr), 0);
-                      int ed = Math.min((j + deltaNr + 1), valNr);
-                      for(int k = st; k < ed; k++){
-                          if(resCache[i - 1][k] == -1)
-                              continue;
-                          double candVal = resCache[i - 1][k] + cand;
-                          if(resCache[i][j] == -1.0 || resCache[i][j] > candVal){
-                              resCache[i][j] = candVal;
-                              choiceCache[i][j] = k;
-                          }
-                      }
-                  }
-              }
-
-              minSum = -1.0;
-              int candIdx = -1;
-              for(int i = 0; i < valNr; i++){
-                  if(minSum == -1 || minSum > resCache[vals.size()][i]){
-                      minSum = resCache[vals.size()][i];
-                      candIdx = i;
-                  }
-              }
-
-              if(minSum != -1){
-                  Double[] newVals = new Double[vals.size()];
-                  for(int i = vals.size() - 1; i >= 0; i--){
-                      newVals[i] = candIdx * granularity + minVal;
-                      candIdx = choiceCache[i+1][candIdx];
-                  }
-                  vals = new ArrayList<Double>(Arrays.asList(newVals));
-              }
-
-              return vals;
-          }
+      public DynamicProgramming(double g, double d, double min, double max){
+        granularity = g;
+        delta = d;
+        minVal = min;
+        maxVal = max;
+        valNr = (int)Math.ceil((maxVal - minVal) / granularity) + 1;
+        deltaNr = (int)Math.floor(delta / granularity);
       }
+
+      public DynamicProgramming(double g, double d, double min){
+        this(g, d, min, 1.0);
+      }
+
+      public DynamicProgramming(double g, double d){
+        this(g, d, 0.0, 1.0);
+      }
+
+      public ArrayList<Double> runGreedy(ArrayList<Double> vals, Double oldValue){
+
+        // filter the values less then minVal
+        ListIterator<Double> iter = vals.listIterator();
+        double old = oldValue.doubleValue();
+        while(iter.hasNext()){
+          Double v = iter.next();
+          double min = Math.max(minVal, old - deltaNr * granularity);
+          double max = Math.min(maxVal, old + deltaNr * granularity);
+          if(v <= min) v = min;
+          else if(v >= max) v = max;
+          else v = (int)(v / granularity) * granularity;
+          old = v;
+          iter.set(v);
+        }
+
+        return vals;
+      }
+
+      public ArrayList<Double> runDP(ArrayList<Double> vals, Double oldValue){
+        resCache = new Double[vals.size() + 1][valNr];
+        choiceCache = new Integer[vals.size() + 1][valNr];
+
+        int oldLvl = (int)(oldValue / granularity);
+        if(oldLvl != (oldValue / granularity))
+          ++oldLvl;
+
+        // initialize the mediate results
+        for(Double[] sub : resCache)
+          Arrays.fill(sub, -1.0);
+
+        for(Integer[] sub : choiceCache)
+          Arrays.fill(sub, -1);
+
+        // filter the values less then minVal
+        ListIterator<Double> iter = vals.listIterator();
+        while(iter.hasNext()){
+          if(iter.next() < 0.4)
+            iter.set(0.4);
+        }
+
+
+        for(int i = 0; i < valNr; i++){
+          if(i < oldLvl)
+            resCache[0][i] = -1.0;
+          else
+            resCache[0][i] = granularity * i + minVal;
+        }
+
+        for(int i = 1; i < vals.size() + 1; i++){
+          for(int j = 0; j < valNr; j++){
+            double cand = j * granularity + minVal;
+            if(cand < vals.get(i-1))
+              continue;
+            int st = Math.max((j - deltaNr), 0);
+            int ed = Math.min((j + deltaNr + 1), valNr);
+            for(int k = st; k < ed; k++){
+              if(resCache[i - 1][k] == -1)
+                continue;
+              double candVal = resCache[i - 1][k] + cand;
+              if(resCache[i][j] == -1.0 || resCache[i][j] > candVal){
+                resCache[i][j] = candVal;
+                choiceCache[i][j] = k;
+              }
+            }
+          }
+        }
+
+        minSum = -1.0;
+        int candIdx = -1;
+        for(int i = 0; i < valNr; i++){
+          if(minSum == -1 || minSum > resCache[vals.size()][i]){
+            minSum = resCache[vals.size()][i];
+            candIdx = i;
+          }
+        }
+
+        if(minSum != -1){
+          Double[] newVals = new Double[vals.size()];
+          for(int i = vals.size() - 1; i >= 0; i--){
+            newVals[i] = candIdx * granularity + minVal;
+            candIdx = choiceCache[i+1][candIdx];
+          }
+          vals = new ArrayList<Double>(Arrays.asList(newVals));
+        }
+
+        return vals;
+      }
+    }
 
   }
 

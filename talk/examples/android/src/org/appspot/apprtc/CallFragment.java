@@ -43,6 +43,7 @@ import org.webrtc.VideoRendererGui.ScalingType;
 import java.util.HashMap;
 import java.util.Map;
 
+import android.util.Log;
 /**
  * Fragment for call control.
  */
@@ -206,6 +207,7 @@ public class CallFragment extends Fragment {
         }
         bweBuilder.append("\n");
       }
+      Log.d("statistics", report.toString());
     }
 
     StringBuilder stat = new StringBuilder(128);
