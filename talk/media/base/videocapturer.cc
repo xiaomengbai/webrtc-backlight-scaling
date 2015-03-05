@@ -720,19 +720,20 @@ void VideoCapturer::OnFrameCaptured(VideoCapturer*,
   }
   if(funcEnable){
     // stands for 0%, 2%, 5%, 10% brightest pixels ignorance
-    uint8 lum_thresholds[4] = {0};
+    uint8 lum_thresholds[4] = {255};
 
     uint8 *ydata = adapted_frame.get()->GetYPlane();
     size_t width = adapted_frame.get()->GetWidth();
     size_t height = adapted_frame.get()->GetHeight();
     size_t size =  width * height;
+    size /= 6;
     size_t boundries[4];
     boundries[0] = size;
     boundries[1] = (size_t)(size * 0.98);
     boundries[2] = (size_t)(size * 0.95);
     boundries[3] = (size_t)(size * 0.90);
     bool check_done[4] = {false};
-    // Scan the frame, perform histogram
+    // Scan the frame, generate histogram
     for(int i = 0; i != size; i++){
       hist[ydata[i]] += 1;
     }
@@ -741,10 +742,13 @@ void VideoCapturer::OnFrameCaptured(VideoCapturer*,
     ydata[1] = (uint8)((index & 0xFF000000) >> 24);
     ydata[2] = (uint8)((index & 0x00FF0000) >> 16);
     ydata[3] = (uint8)((index & 0x0000FF00) >>  8);
-    ydata[4] = (uint8)(index & 0x000000FF      );
+    ydata[4] = (uint8)( index & 0x000000FF      );
     index++;
 
     for(uint8_t i = 255; i != 0; i--){
+      if(check_done[0] && check_done[1] &&
+         check_done[2] && check_done[3])
+        break;
       size -= hist[i];
       if(size < boundries[0] && !check_done[0]){
         lum_thresholds[0] = i;

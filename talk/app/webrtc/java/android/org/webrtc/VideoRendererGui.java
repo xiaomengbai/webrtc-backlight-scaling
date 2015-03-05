@@ -269,8 +269,8 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     private int renderIdx;
     private final static int ALG_DP = 0;
     private final static int ALG_GREEDY = 1;
-    private final int algChosen = ALG_DP;
-    private static boolean funcEnable = false;
+    private final int algChosen = ALG_GREEDY;
+    private static boolean funcEnable = true;
     private static boolean recordEnable = false;
     private Double lastBacklight = 1.0;
     private DataOutputStream outData;

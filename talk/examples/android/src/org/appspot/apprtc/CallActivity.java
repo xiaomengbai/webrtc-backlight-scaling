@@ -166,7 +166,7 @@ public class CallActivity extends Activity
   private Double updatedBacklight;
   private Double accBacklight;
   private Integer accTimes;
-  private static boolean funcEnable = false;
+  private static boolean funcEnable = true;
 
     {
       backlightMap = new HashMap<Integer, Double>();
@@ -717,7 +717,7 @@ public class CallActivity extends Activity
   @Override
   public void tryScaleBacklight(int index){
     Double b;
-/*
+
     if(funcEnable){
       synchronized(this){
         b = backlightMap.get(index);
@@ -743,7 +743,6 @@ public class CallActivity extends Activity
           });
       }
     }
-*/
   }
 
   @Override
