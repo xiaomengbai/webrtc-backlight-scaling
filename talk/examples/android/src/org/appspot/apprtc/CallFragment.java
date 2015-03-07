@@ -176,7 +176,7 @@ public class CallFragment extends Fragment {
     return reportMap;
   }
 
-  public void updateEncoderStatistics(final StatsReport[] reports) {
+    public void updateEncoderStatistics(final StatsReport[] reports, final double brightness) {
     if (!isRunning || !displayHud) {
       return;
     }
@@ -226,6 +226,11 @@ public class CallFragment extends Fragment {
           .append(actualBitrate)
           .append("\n");
     }
+
+    stat.append("Avg backlight: ")
+        .append(brightness)
+        .append("\n");
+
     encoderStatView.setText(stat.toString());
     hudView.setText(bweBuilder.toString() + hudView.getText());
   }

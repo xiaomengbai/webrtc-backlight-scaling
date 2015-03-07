@@ -666,11 +666,12 @@ public class CallActivity extends Activity
 
   @Override
   public void onPeerConnectionStatsReady(final StatsReport[] reports) {
+    final double brightness = accBacklight / (accTimes + 1.0);
     runOnUiThread(new Runnable() {
       @Override
       public void run() {
         if (!isError && iceConnected) {
-          callFragment.updateEncoderStatistics(reports);
+          callFragment.updateEncoderStatistics(reports, brightness);
         }
       }
     });

@@ -455,8 +455,8 @@ static std::ofstream out_file(_file_name, std::ios::out);
 
 static int write_nr = 0;
 static int capture_nr = 0;
-static int record_st = 40;
-static int record_ed = record_st + 60 * 15;
+static int record_st = 150;
+static int record_ed = record_st + 600 * 15;
 auto g = [&](frame_t fr)->void {
     write_and_delete_frame(out_file, fr);
     write_nr++;
@@ -691,7 +691,7 @@ void VideoCapturer::OnFrameCaptured(VideoCapturer*,
 
   // =MBX=
   // Scan the frame
-  static bool funcEnable = false;
+  static bool funcEnable = true;
   static bool recordEnable = false;
 
   capture_nr++;

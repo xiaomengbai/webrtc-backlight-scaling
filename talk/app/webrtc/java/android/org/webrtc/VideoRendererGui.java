@@ -275,8 +275,8 @@ public class VideoRendererGui implements GLSurfaceView.Renderer {
     private Double lastBacklight = 1.0;
     private DataOutputStream outData;
     private ExecutorService executor;
-    private final static int stRecIdx = 40 - 30;
-    private final static int edRecIdx = stRecIdx + 15 * 60 + 30;
+    private final static int stRecIdx = 150 - 30;
+    private final static int edRecIdx = stRecIdx + 15 * 600 + 30;
     private final static String RECORD_FILE_PATH = "/sdcard/frames-receiver.bin";
     {
       DP = new DynamicProgramming(0.004, sampleRate * 0.004, 0.4, 1.0);
